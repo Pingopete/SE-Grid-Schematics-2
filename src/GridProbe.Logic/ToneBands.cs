@@ -26,6 +26,7 @@ internal static class ToneBands
 {
     public const int Levels = 40;             // tone quantization steps
     private const int MaxSegsPerBand = 15000;
+    private const float MinCornerRun = 1.6f;  // straight edge (cells) needed either side of a real corner
     // Cell-space error bound per detail tier. The renderer picks the coarsest
     // tier whose error stays under a third of an on-screen pixel, so the
     // simplification is invisible by construction at every zoom.
@@ -181,26 +182,12 @@ internal static class ToneBands
     {
         int w = field.GetLength(0), h = field.GetLength(1);
 
-        float At(int i, int j) => i < 0 || j < 0 || i >= w || j >= h ? 0f : field[i, j];
-        float Sample(float x, float y)
-        {
-            float fx = x - 0.5f, fy = y - 0.5f;
-            int i = (int)MathF.Floor(fx), j = (int)MathF.Floor(fy);
-            float tx = fx - i, ty = fy - j;
-            return At(i, j) * (1 - tx) * (1 - ty) + At(i + 1, j) * tx * (1 - ty)
-                 + At(i, j + 1) * (1 - tx) * ty + At(i + 1, j + 1) * tx * ty;
-        }
-        (float X, float Y) Grad(float x, float y)
-        {
-            const float e = 0.35f;
-            return (Sample(x + e, y) - Sample(x - e, y), Sample(x, y + e) - Sample(x, y - e));
-        }
-
         var buf = new List<(float X, float Y)>(256);
         foreach (var loop in loops)
         {
             int n = loop.Count;
             if (n < 3) continue;
+
             buf.Clear();
             for (int i = 0; i < n; i++)
             {
@@ -211,28 +198,68 @@ internal static class ToneBands
                 float len2 = dx * dx + dy * dy;
                 if (len2 > 1.21f || len2 < 1e-6f) continue; // chamfer chords are sub-cell
 
-                var ga = Grad(a.X, a.Y);
-                var gb = Grad(b.X, b.Y);
-                float la = MathF.Sqrt(ga.X * ga.X + ga.Y * ga.Y);
-                float lb = MathF.Sqrt(gb.X * gb.X + gb.Y * gb.Y);
-                if (la < 1e-4f || lb < 1e-4f) continue;
-                float dot = (ga.X * gb.X + ga.Y * gb.Y) / (la * lb);
-                if (dot > 0.82f) continue;                  // near-parallel: genuine slope
+                // Compare the HEADING of the edge arriving at a with the one
+                // leaving b. Field gradients cannot be used for this: on
+                // quantized data they swing about from cell to cell even where
+                // the contour itself runs dead straight, so they report a
+                // corner at every staircase step and harden it into a tooth.
+                var (inX, inY) = RunDir(loop, i, -1);
+                var (outX, outY) = RunDir(loop, i + 1, +1);
+                if ((inX == 0 && inY == 0) || (outX == 0 && outY == 0)) continue;
+                if (inX * outX + inY * outY > 0.906f) continue;   // within ~25 deg: one straight edge
 
-                float det = ga.X * gb.Y - ga.Y * gb.X;
+                float det = inX * outY - inY * outX;
                 if (Math.Abs(det) < 1e-6f) continue;
-                float c1 = ga.X * a.X + ga.Y * a.Y;
-                float c2 = gb.X * b.X + gb.Y * b.Y;
-                float px = (c1 * gb.Y - c2 * ga.Y) / det;
-                float py = (ga.X * c2 - gb.X * c1) / det;
+                float t = ((b.X - a.X) * outY - (b.Y - a.Y) * outX) / det;
+                float px = a.X + t * inX;
+                float py = a.Y + t * inY;
                 float da = (px - a.X) * (px - a.X) + (py - a.Y) * (py - a.Y);
                 float db = (px - b.X) * (px - b.X) + (py - b.Y) * (py - b.Y);
-                if (da > 1f || db > 1f) continue;           // implausible intersection
+                if (da > 2.25f || db > 2.25f) continue;     // implausible intersection
                 buf.Add((px, py));
             }
             loop.Clear();
             loop.AddRange(buf);
         }
+    }
+
+    // Unit heading of the straight run leaving a vertex, followed around the
+    // loop while the direction holds. Returns (0,0) if the run is too short to
+    // be a real edge — which is how a staircase step is told apart from a
+    // corner where two long edges genuinely meet.
+    private static (float X, float Y) RunDir(List<(float X, float Y)> loop, int start, int step)
+    {
+        int n = loop.Count;
+        int i0 = ((start % n) + n) % n;
+        int i1 = ((i0 + step) % n + n) % n;
+        var p0 = loop[i0];
+        var p1 = loop[i1];
+        float dx0 = p1.X - p0.X, dy0 = p1.Y - p0.Y;
+        float l0 = MathF.Sqrt(dx0 * dx0 + dy0 * dy0);
+        if (l0 < 1e-6f) return (0f, 0f);
+        dx0 /= l0; dy0 /= l0;
+        float total = l0;
+        float ex = p1.X, ey = p1.Y;
+        for (int s = 1; s < 10; s++)
+        {
+            int j0 = ((i0 + step * s) % n + n) % n;
+            int j1 = ((i0 + step * (s + 1)) % n + n) % n;
+            var q0 = loop[j0];
+            var q1 = loop[j1];
+            float dx = q1.X - q0.X, dy = q1.Y - q0.Y;
+            float l = MathF.Sqrt(dx * dx + dy * dy);
+            if (l < 1e-6f) continue;
+            if ((dx * dx0 + dy * dy0) / l < 0.985f) break;
+            total += l;
+            ex = q1.X; ey = q1.Y;
+        }
+        if (total < MinCornerRun) return (0f, 0f);
+        // Heading measured end-to-end, so a single noisy segment cannot tilt it.
+        float hx = ex - p0.X, hy = ey - p0.Y;
+        float hl = MathF.Sqrt(hx * hx + hy * hy);
+        if (hl < 1e-6f) return (0f, 0f);
+        // Always expressed in the loop's forward direction.
+        return step > 0 ? (hx / hl, hy / hl) : (-hx / hl, -hy / hl);
     }
 
     // Drop collinear points: marching squares emits a vertex per cell edge,

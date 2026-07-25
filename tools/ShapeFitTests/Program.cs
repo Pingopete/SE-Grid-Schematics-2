@@ -258,5 +258,146 @@ Console.WriteLine($"{(solidOk ? "ok  " : "FAIL")} structure stays drawn: {missPc
 if (!holesOk) failures++;
 if (!solidOk) failures++;
 
+// ---------------------------------------------------------------------------
+// A straight edge must reconstruct as a STRAIGHT line.
+//
+// Feed a perfect half-plane at various angles and measure how far the recovered
+// contour strays from the true line. Anything above a fraction of a cell shows
+// up on a panel as periodic notches along diagonal members.
+Console.WriteLine("\n--- straight edges stay straight ---");
+foreach (var (nx, ny, label) in new[]
+{
+    (1.0, 1.0, "45 degrees"),
+    (1.0, 2.0, "1:2"),
+    (2.0, 1.0, "2:1"),
+    (1.0, 3.0, "1:3"),
+})
+{
+    int S = 60;
+    var ecov = new byte[S, S];
+    var etone = new byte[S, S];
+    double len = Math.Sqrt(nx * nx + ny * ny);
+    double ux = nx / len, uy = ny / len;
+    double off = 6.0;
+    for (int x = 0; x < S; x++)
+        for (int y = 0; y < S; y++)
+        {
+            // Exact projected area of the cell on the solid side, supersampled.
+            int hits = 0;
+            const int Q = 8;
+            for (int i = 0; i < Q; i++)
+                for (int j = 0; j < Q; j++)
+                {
+                    double sx = x + (i + 0.5) / Q, sy = y + (j + 0.5) / Q;
+                    if (sx * ux + sy * uy <= off + S * 0.5 * (ux + uy)) hits++;
+                }
+            int c = (int)Math.Round(hits / (double)(Q * Q) * BlockShapes.FracUnits);
+            ecov[x, y] = (byte)c;
+            etone[x, y] = (byte)(c > 0 ? 200 : 0);
+        }
+
+    var eb = ToneBands.Build(etone, ecov);
+    if (eb.Bands.Count == 0) { Console.WriteLine($"FAIL {label}: no bands"); failures++; continue; }
+
+    // Sample ALONG the contour segments, not just at vertices: a perfectly
+    // straight edge decimates down to its two endpoints, so vertex-only
+    // sampling would measure nothing.
+    double worst = 0; int counted = 0;
+    foreach (var lp in eb.Bands[0].Loops)
+    {
+        var pts = lp.L[0];
+        int m = pts.Length / 2;
+        for (int i = 0; i < m; i++)
+        {
+            int j = (i + 1) % m;
+            for (int t = 0; t <= 16; t++)
+            {
+                double f = t / 16.0;
+                double px = pts[i * 2] + (pts[j * 2] - pts[i * 2]) * f;
+                double py = pts[i * 2 + 1] + (pts[j * 2 + 1] - pts[i * 2 + 1]) * f;
+                if (px < 12 || px > S - 12 || py < 12 || py > S - 12) continue;  // ignore the frame
+                double d = Math.Abs(px * ux + py * uy - (off + S * 0.5 * (ux + uy)));
+                if (d > worst) worst = d;
+                counted++;
+            }
+        }
+    }
+    bool ok = counted > 0 && worst < 0.30;
+    Console.WriteLine($"{(ok ? "ok  " : "FAIL")} {label}: max deviation {worst:F3} cells over {counted} points");
+    if (!ok) failures++;
+}
+
+// ---------------------------------------------------------------------------
+// Quantized diagonals must not be hardened into teeth, and real corners must
+// still come out sharp. Both look alike locally, so this is the pair that keeps
+// corner sharpening honest.
+Console.WriteLine("\n--- corners sharp, staircases not hardened ---");
+{
+    // A 45 degree edge with NO sub-cell data: pure binary staircase, which is
+    // what a column of solid blocks projects to.
+    int S = 48;
+    var scov = new byte[S, S];
+    var stone = new byte[S, S];
+    for (int x = 0; x < S; x++)
+        for (int y = 0; y < S; y++)
+            if (x + y <= S) { scov[x, y] = (byte)BlockShapes.FracUnits; stone[x, y] = 200; }
+
+    var sb = ToneBands.Build(stone, scov);
+    // Binary data localises the edge only to within half a cell, so its exact
+    // offset is not knowable; what matters is that the reconstruction is
+    // STRAIGHT. Measure the spread of the signed distance, not its magnitude.
+    double dLo = double.MaxValue, dHi = double.MinValue;
+    double worst = 0; int counted = 0;
+    foreach (var lp in sb.Bands[0].Loops)
+    {
+        var pts = lp.L[0];
+        int m = pts.Length / 2;
+        for (int i = 0; i < m; i++)
+        {
+            int j = (i + 1) % m;
+            for (int t = 0; t <= 16; t++)
+            {
+                double f = t / 16.0;
+                double px = pts[i * 2] + (pts[j * 2] - pts[i * 2]) * f;
+                double py = pts[i * 2 + 1] + (pts[j * 2 + 1] - pts[i * 2 + 1]) * f;
+                if (px < 8 || px > S - 8 || py < 8 || py > S - 8) continue;
+                double d = (px + py - S) / Math.Sqrt(2.0);
+                if (d < dLo) dLo = d;
+                if (d > dHi) dHi = d;
+                counted++;
+            }
+        }
+    }
+    worst = counted > 0 ? dHi - dLo : 0;
+    // A straight reconstruction has near-zero spread. Hardening each staircase
+    // step into a square tooth swings it by about a cell.
+    bool ok = counted > 0 && worst < 0.35;
+    Console.WriteLine($"{(ok ? "ok  " : "FAIL")} binary diagonal reconstructs straight: waviness {worst:F3} cells over {counted} points");
+    if (!ok) failures++;
+
+    // A real right angle: a solid rectangle. Its corner must stay square.
+    int R = 40;
+    var rcov = new byte[R, R];
+    var rtone = new byte[R, R];
+    for (int x = 0; x < R; x++)
+        for (int y = 0; y < R; y++)
+            if (x >= 8 && x < 32 && y >= 8 && y < 32) { rcov[x, y] = (byte)BlockShapes.FracUnits; rtone[x, y] = 200; }
+
+    var rb = ToneBands.Build(rtone, rcov);
+    double nearest = double.MaxValue;
+    foreach (var lp in rb.Bands[0].Loops)
+    {
+        var pts = lp.L[0];
+        for (int i = 0; i < pts.Length; i += 2)
+        {
+            double d = Math.Sqrt(Math.Pow(pts[i] - 8.0, 2) + Math.Pow(pts[i + 1] - 8.0, 2));
+            if (d < nearest) nearest = d;
+        }
+    }
+    bool cornerOk = nearest < 0.30;
+    Console.WriteLine($"{(cornerOk ? "ok  " : "FAIL")} real right angle stays sharp: corner within {nearest:F3} cells");
+    if (!cornerOk) failures++;
+}
+
 Console.WriteLine(failures == 0 ? "\nALL GEOMETRY TESTS PASSED" : $"\n{failures} GEOMETRY TESTS FAILED");
 return failures == 0 ? 0 : 1;
