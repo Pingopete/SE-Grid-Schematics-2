@@ -144,6 +144,7 @@ internal static class LcdProbe
                     DumpCoverage(scan.CovSide, "cov_side");
                     ProbeLog.Line("Mode tone + coverage fields exported (output\\mode_*.bmp, cov_*.bmp).");
                     AutoEdgeAudit(scan, anyGridOfShip);
+                    SeamAudit(scan, anyGridOfShip);
                 }
             }
             catch (Exception e) { ProbeLog.Error("pass preprocessing", e); }
@@ -189,6 +190,49 @@ internal static class LcdProbe
             }
         }
         catch (Exception e) { ProbeLog.Error("edge audit", e); }
+    }
+
+    // Finds where an otherwise steady diagonal edge JOGS — the silhouette
+    // stepping two or more cells in one row where it had been stepping one, and
+    // losing its fractional cell as it does. That is the signature of the
+    // "divet" artefact, and it names the blocks meeting at the seam.
+    private static void SeamAudit(OccupancyScan scan, CubeGridComponent grid)
+    {
+        try
+        {
+            var cov = scan.CovSide; // side view [Z,Y] after rotation
+            if (cov == null) return;
+            int w = cov.GetLength(0), h = cov.GetLength(1);
+
+            // Leftmost occupied cell per row: the silhouette's left boundary.
+            var edge = new int[h];
+            for (int y = 0; y < h; y++)
+            {
+                edge[y] = -1;
+                for (int x = 0; x < w; x++)
+                    if (cov[x, y] > 0) { edge[y] = x; break; }
+            }
+
+            int found = 0;
+            for (int y = 2; y < h - 2 && found < 6; y++)
+            {
+                if (edge[y] < 0 || edge[y - 1] < 0 || edge[y + 1] < 0 || edge[y - 2] < 0) continue;
+                int stepPrev = edge[y - 1] - edge[y - 2];
+                int stepHere = edge[y] - edge[y - 1];
+                // Was walking one cell per row, then jumped further in one row.
+                if (Math.Abs(stepPrev) != 1 || Math.Abs(stepHere) < 2) continue;
+                if (Math.Sign(stepPrev) != Math.Sign(stepHere)) continue;
+
+                found++;
+                ProbeLog.Line($"Seam audit {found}: side cell ({edge[y]},{y}) edge stepped {stepHere} after steady {stepPrev}; cov here={cov[edge[y], y]} prev row={cov[edge[y - 1], y - 1]}");
+                // Side view display (du,dv) -> grid, mirroring CellInspector.
+                int gy = scan.Min.Y + (scan.Size.Y - 1 - y);
+                int gz = scan.Min.Z + edge[y];
+                CellInspector.ListColumn(grid, PanelState.ViewSide, int.MinValue, gy, gz);
+            }
+            if (found == 0) ProbeLog.Line("Seam audit: no jogged diagonal edges found.");
+        }
+        catch (Exception e) { ProbeLog.Error("seam audit", e); }
     }
 
     private static void DumpCoverage(byte[,] cov, string name)

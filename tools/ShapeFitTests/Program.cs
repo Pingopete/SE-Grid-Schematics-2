@@ -1,6 +1,8 @@
 using GridProbe;
 using Keen.VRage.Library.Mathematics;
 
+if (args.Length > 0 && args[0] == "render") return RenderReal.Run(args);
+
 // Ground-truth test for analytic shape recovery.
 //
 // Each case defines a TRUE continuous solid, voxelizes it the way the engine

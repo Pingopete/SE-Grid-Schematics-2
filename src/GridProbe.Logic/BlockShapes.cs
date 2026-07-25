@@ -132,7 +132,10 @@ internal static class BlockShapes
                 for (int i = 0; i < planes.Count; i++) Array.Copy(planes[i], 0, flat, i * 4, 4);
                 result.Planes = flat;
                 result.Label = $"Convex({planes.Count}p IoU {iou:F3})";
-                ProbeLog.Line($"Shape recovered: {planes.Count} planes IoU {iou:F3} vol {truthCells / (double)total:F3} :: {defName}");
+                var desc = new System.Text.StringBuilder();
+                foreach (var p in planes)
+                    desc.Append($" [n=({p[0]:F2},{p[1]:F2},{p[2]:F2}) d={p[3]:F4}]");
+                ProbeLog.Line($"Shape recovered: {planes.Count} planes IoU {iou:F3} vol {truthCells / (double)total:F3} ::{desc} :: {defName}");
             }
             else
             {
