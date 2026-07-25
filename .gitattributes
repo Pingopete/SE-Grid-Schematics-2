@@ -1,0 +1,7 @@
+* text=auto
+*.cs text diff=csharp
+*.csproj text
+*.props text
+*.md text
+*.bat text eol=crlf
+*.sln text eol=crlf
