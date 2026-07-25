@@ -2,6 +2,7 @@ using GridProbe;
 using Keen.VRage.Library.Mathematics;
 
 if (args.Length > 0 && args[0] == "render") return RenderReal.Run(args);
+if (args.Length > 0 && args[0] == "bands") return RenderReal.Bands(args);
 
 // Ground-truth test for analytic shape recovery.
 //

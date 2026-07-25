@@ -30,6 +30,7 @@ internal static class ToneBands
     public const int Levels = 64;
     private const int MaxSegsPerBand = 15000;
     private const float MinCornerRun = 1.6f;  // straight edge (cells) needed either side of a real corner
+    private const float MinLoopArea = 6.0f;   // cells^2; below this an island is not visible at any zoom we draw
     // Cell-space error bound per detail tier. The renderer picks the coarsest
     // tier whose error stays under a third of an on-screen pixel, so the
     // simplification is invisible by construction at every zoom.
@@ -135,6 +136,11 @@ internal static class ToneBands
             {
                 var pts = Decimate(loop, eps);
                 if (pts == null) continue;
+                // A richer tone field fragments each contour into specks — an
+                // island a cell across is invisible but still costs a full loop
+                // of segments every frame. Cost tracks contour length, so this
+                // is where the budget actually goes.
+                if (Math.Abs(SignedArea(pts)) < MinLoopArea) continue;
                 var l = new Loop { L = new float[LodTol.Length][], MinX = float.MaxValue, MinY = float.MaxValue, MaxX = float.MinValue, MaxY = float.MinValue };
                 l.L[0] = pts;
                 for (int i = 0; i < pts.Length; i += 2)
@@ -167,6 +173,18 @@ internal static class ToneBands
         }
         set.Bands.Add(band);
         cum += band.Alpha / 255.0 * (1.0 - cum);
+    }
+
+    private static float SignedArea(float[] pts)
+    {
+        int m = pts.Length / 2;
+        float a = 0f;
+        for (int i = 0; i < m; i++)
+        {
+            int j = (i + 1) % m;
+            a += pts[i * 2] * pts[j * 2 + 1] - pts[j * 2] * pts[i * 2 + 1];
+        }
+        return a * 0.5f;
     }
 
     private static float[] BuildLod(Loop l, float[] src, float tol)

@@ -627,6 +627,9 @@ internal static class VectorLcd
     private static QuadraticBezier2[] _splineBuf;
     private static readonly object _vecLock = new();
 
+    // Per-frame geometry ceiling, set from what the smoothest mode costs while
+    // holding 60 fps. Keeps every mode in the same performance envelope.
+    private const int SegmentBudget = 40000;
     private static int _lastBandLod, _lastBandSegs;
     // Record-cost telemetry: is the per-frame cost OUR CPU work (transform +
     // submit) or the GPU/engine? Averaged over each diag window.
@@ -650,6 +653,13 @@ internal static class VectorLcd
             int lod = 0;                                    // coarsest tier still under the bound
             for (int t = ToneBands.LodTol.Length - 1; t >= 0; t--)
                 if (tolCells >= ToneBands.LodTol[t]) { lod = t; break; }
+            // The error bound is a quality target; this is a cost guarantee.
+            // A richer tone field (complexity, voids) fragments every contour,
+            // so the same on-screen accuracy can cost twice the geometry. Step
+            // coarser rather than let one mode run away — the detail being
+            // dropped is what a stricter error bound would have kept, which at
+            // these zooms is below what the panel resolves anyway.
+            while (lod < ToneBands.LodTol.Length - 1 && bands.TotalSegs[lod] > SegmentBudget) lod++;
             float wx0 = (float)(win.Wx0 - 1), wy0 = (float)(win.Wy0 - 1);
             float wx1 = (float)(win.Wx0 + win.WinW + 1), wy1 = (float)(win.Wy0 + win.WinH + 1);
             byte bb = (byte)BlitBrightness;

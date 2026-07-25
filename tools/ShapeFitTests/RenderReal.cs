@@ -6,6 +6,32 @@ using GridProbe;
 // renderer. Run with:  dotnet run -- render <cov.bmp> <out.bmp> <x0> <y0> <w> <h> <scale>
 internal static class RenderReal
 {
+    // dotnet run -- bands <mode_xxx.bmp>
+    // Builds bands from a real exported TONE field and reports the geometry
+    // cost, so band settings can be tuned without waiting on an in-game mode
+    // switch (band sets are cached per view+mode).
+    public static int Bands(string[] args)
+    {
+        var (img, iw, ih) = ReadGray8(args[1]);
+        var tone = new byte[iw, ih];
+        var cov = new byte[iw, ih];
+        int occupied = 0;
+        for (int x = 0; x < iw; x++)
+            for (int y = 0; y < ih; y++)
+            {
+                byte v = img[y * iw + x];
+                tone[x, y] = v;
+                if (v > 0) { cov[x, y] = (byte)BlockShapes.FracUnits; occupied++; }
+            }
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var set = ToneBands.Build(tone, cov);
+        int loops = 0;
+        foreach (var b in set.Bands) loops += b.Loops.Count;
+        Console.WriteLine($"{System.IO.Path.GetFileName(args[1])}: {iw}x{ih}, {occupied} occupied");
+        Console.WriteLine($"  bands={set.Bands.Count} loops={loops} segs={string.Join("/", set.TotalSegs)} built in {sw.ElapsedMilliseconds} ms");
+        return 0;
+    }
+
     public static int Run(string[] args)
     {
         string src = args[1], dst = args[2];
