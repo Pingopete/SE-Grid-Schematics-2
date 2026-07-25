@@ -39,7 +39,7 @@ internal static class ToneFields
         };
         if (mode == PanelState.ModeThickness) return ToneMaps.BuildThickness(thick);
         if (scan.ChannelAxis != depthAxis) return null; // channels not computed yet
-        var runs = scan.ChRuns;
+        var runs = scan.ChLayers;
         var voids = scan.ChVoids;
         // Torn channel state (axis says match, dims say otherwise) from an old
         // race: force a recompute instead of indexing out of bounds forever.

@@ -105,27 +105,37 @@ edited, not on the 2-second scan cadence.
 - **Complexity (x-ray)** — structural layers crossed, so interior structure reads
 - **Voids** — enclosed empty space emphasised over the structure containing it
 
-Thickness is measured in sixteenths of a cell, so it is continuous and maps
-straight to a smooth ramp. **Runs and voids are whole-cell counts** — small
-integers — and mapping those directly posterizes the image: each count owns a
-slab of the tone range and leaves unused gaps between them. Measured on a real
-ship, complexity occupied 7 tone bins with *empty* ranges between them, against
-thickness's 13 evenly spread.
+All three read **continuous quantities measured from the recovered geometry**, so
+their gradients come from the shape itself.
 
-Two corrections fix that, both operating on data the geometry scan already
-produces:
+Thickness was always continuous — material length along a ray varies smoothly
+because the geometry does. Layers and voids originally counted *whole cells*,
+which posterizes: each count owns a slab of the tone range and leaves unused gaps
+between. Measured on a real ship, complexity occupied 7 tone bins with *empty*
+ranges between them, against thickness's 13 evenly spread.
 
-- **Smooth the counts across neighbouring columns** (3×3 tent, occupied columns
-  only — averaging across the silhouette would eat the outline). A column
-  crossing 3 layers next to one crossing 4 genuinely is between the two, so this
-  recovers real intermediate values rather than inventing detail.
-- **Set ranges from percentiles, not min/max**, so one outlier column — a deep
-  shaft, a large bay — cannot compress everything else into a narrow band.
+The fix is to measure them the same way thickness is measured. `DepthChannels`
+now works on **sub-cell depth spans**: for a block whose analytic solid was
+recovered, the first and last occupied cell in a column are only partly filled,
+and that fraction says where the surface actually sits. A slope therefore
+produces spans that slide smoothly from column to column.
 
-Voids additionally puts structure and void on **one continuous ramp** instead of
-two disjoint bands. Previously the hull was confined to 35–75 while voids got
-110–255, which put 81.6% of occupied pixels inside a 40-level band; structure now
-gets a real range and void volume adds brightness on top of it.
+- **Layers** weights each gap by how open it is (`1 − e^(−gap/1.5)`) rather than
+  counting it. A hairline seam between two plates is not a whole extra
+  structural layer, and the value rises smoothly as a gap widens instead of
+  stepping the moment it appears.
+- **Voids** is enclosed empty length between first and last material — continuous
+  for the same reason.
+- Ranges come from **percentiles, not min/max**, so one outlier column cannot
+  compress everything else into a narrow band.
+
+Voids also puts structure and void on **one continuous ramp** rather than two
+disjoint bands. The hull was confined to 35–75 while voids got 110–255, putting
+81.6% of occupied pixels inside a 40-level band.
+
+Note what is deliberately *not* done here: a blur over the cell grid produces
+gradients too, but they are a smear of coarse data rather than a property of the
+shape. Blurring was tried and removed — the values must be continuous at source.
 
 Note that the **band count is the output bit depth** — within a band the alpha is
 constant, so it caps how many greys the panel can show however smooth the field

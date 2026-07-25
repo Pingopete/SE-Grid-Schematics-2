@@ -22,10 +22,16 @@ internal sealed class OccupancyScan
     public long ViewHash; // lazy FNV of Front, for panel image caching
     public Dictionary<(int ViewAxis, int Mode), byte[,]> ToneCache; // display tone fields per mode
     public List<BoundingBoxI> Boxes; // retained for depth-channel analysis
+    // Blocks whose analytic solid was recovered, kept so depth analysis can
+    // read their sub-cell profile instead of their whole-cell boxes.
+    public List<(BoundingBoxI Aabb, BlockShapes.Stamp Stamp)> Shaped;
+    // Cell boxes of everything NOT covered by a recovered solid, so depth
+    // analysis never counts a block twice.
+    public List<BoundingBoxI> UnshapedBoxes;
 
     // Lazily computed per-column channels for one depth axis at a time.
     public volatile int ChannelAxis = -1;
-    public int[,] ChFilled, ChRuns, ChVoids;
+    public float[,] ChFilled, ChLayers, ChVoids;
 
 
     // Cached iso-band vector geometry per (view, mode) — the single renderer
@@ -111,25 +117,129 @@ internal sealed class OccupancyScan
         {
             if (ChannelAxis == depthAxis) return;
             var sw = Stopwatch.StartNew();
-            var (fil, runs, voids) = DepthChannels.Compute(Boxes, Min, Size, depthAxis);
+            var (spans, uw, vh) = BuildSpans(depthAxis);
+            var (fil, layers, voids) = DepthChannels.Compute(spans, uw, vh);
             if (depthAxis == 0) // side view: match the rotated Side/CovSide layout
             {
                 fil = Rot90CCW(fil);
-                runs = Rot90CCW(runs);
+                layers = Rot90CCW(layers);
                 voids = Rot90CCW(voids);
             }
             else if (depthAxis == 2) // front view: match the 180-rotated Top/CovTop layout
             {
                 fil = Rot180(fil);
-                runs = Rot180(runs);
+                layers = Rot180(layers);
                 voids = Rot180(voids);
             }
             ChFilled = fil;
-            ChRuns = runs;
+            ChLayers = layers;
             ChVoids = voids;
             ChannelAxis = depthAxis;
-            ProbeLog.Line($"Depth channels axis {depthAxis}: {Boxes.Count} boxes in {sw.Elapsed.TotalMilliseconds:F1} ms.");
+            ProbeLog.Line($"Depth channels axis {depthAxis}: {spans.Count} spans ({Shaped?.Count ?? 0} shaped blocks) in {sw.Elapsed.TotalMilliseconds:F1} ms.");
         }
+    }
+
+    // Per-column material spans along the depth axis.
+    //
+    // Blocks whose analytic solid was recovered contribute FRACTIONAL spans read
+    // from their stamp: the first and last occupied cell in the column are only
+    // partly filled, and that fraction says where the surface actually sits. A
+    // slope therefore produces spans that slide smoothly from column to column,
+    // which is what makes the derived shading a real gradient rather than a
+    // stepped count. Everything else contributes its whole cell boxes.
+    private (List<DepthChannels.Span> Spans, int UW, int VH) BuildSpans(int depthAxis)
+    {
+        (int ua, int va) = depthAxis switch { 1 => (0, 2), 2 => (0, 1), _ => (1, 2) };
+        int uw = Axis(Size, ua), vh = Axis(Size, va);
+        var spans = new List<DepthChannels.Span>(Boxes.Count * 4);
+        if (Shaped != null)
+        {
+            const float F = BlockShapes.FracUnits;
+            foreach (var (aabb, stamp) in Shaped)
+            {
+                var lo = aabb.Min - Min;
+                var ext = aabb.Max - aabb.Min + new Vector3I(1, 1, 1);
+                int du = Axis(ext, ua), dv = Axis(ext, va), dd = Axis(ext, depthAxis);
+                for (int a = 0; a < du; a++)
+                    for (int b = 0; b < dv; b++)
+                    {
+                        int u = Axis(lo, ua) + a, v = Axis(lo, va) + b;
+                        if (u < 0 || v < 0 || u >= uw || v >= vh) continue;
+
+                        // Walk the column through the stamp for first/last material.
+                        int firstK = -1, lastK = -1;
+                        float firstFill = 0f, lastFill = 0f;
+                        for (int k = 0; k < dd; k++)
+                        {
+                            int f = StampAt(stamp, ua, va, depthAxis, a, b, k);
+                            if (f <= 0) continue;
+                            if (firstK < 0) { firstK = k; firstFill = f / F; }
+                            lastK = k; lastFill = f / F;
+                        }
+                        if (firstK < 0) continue;
+
+                        // Partial end cells are filled from the inside out, so the
+                        // surface sits that fraction in from the cell boundary.
+                        int baseD = Axis(lo, depthAxis);
+                        float d0 = baseD + firstK + (1f - firstFill);
+                        float d1 = baseD + lastK + lastFill;
+                        if (d1 <= d0) d1 = d0 + 0.02f;
+                        spans.Add(new DepthChannels.Span(u * vh + v, d0, d1));
+                    }
+            }
+        }
+
+        // Everything not covered by a recovered solid, using its cell boxes.
+        foreach (var b in UnshapedBoxes ?? Boxes)
+        {
+            var lo = b.Min - Min;
+            var hi = b.Max - Min;
+            int u0 = Math.Max(0, Axis(lo, ua)), u1 = Math.Min(uw - 1, Axis(hi, ua));
+            int v0 = Math.Max(0, Axis(lo, va)), v1 = Math.Min(vh - 1, Axis(hi, va));
+            float d0 = Axis(lo, depthAxis), d1 = Axis(hi, depthAxis) + 1f;
+            for (int u = u0; u <= u1; u++)
+                for (int v = v0; v <= v1; v++)
+                    spans.Add(new DepthChannels.Span(u * vh + v, d0, d1));
+        }
+        return (spans, uw, vh);
+    }
+
+    private static int StampAt(BlockShapes.Stamp s, int ua, int va, int da, int a, int b, int k)
+    {
+        int x = 0, y = 0, z = 0;
+        Set(ref x, ref y, ref z, ua, a);
+        Set(ref x, ref y, ref z, va, b);
+        Set(ref x, ref y, ref z, da, k);
+        if (x < 0 || y < 0 || z < 0
+            || x >= s.Fill.GetLength(0) || y >= s.Fill.GetLength(1) || z >= s.Fill.GetLength(2)) return 0;
+        return s.Fill[x, y, z];
+    }
+
+    private static void Set(ref int x, ref int y, ref int z, int axis, int value)
+    {
+        if (axis == 0) x = value; else if (axis == 1) y = value; else z = value;
+    }
+
+    private static int Axis(Vector3I v, int a) => a == 0 ? v.X : a == 1 ? v.Y : v.Z;
+
+    private static float[,] Rot90CCW(float[,] src)
+    {
+        int w = src.GetLength(0), h = src.GetLength(1);
+        var dst = new float[h, w];
+        for (int x = 0; x < h; x++)
+            for (int y = 0; y < w; y++)
+                dst[x, y] = src[w - 1 - y, x];
+        return dst;
+    }
+
+    private static float[,] Rot180(float[,] src)
+    {
+        int w = src.GetLength(0), h = src.GetLength(1);
+        var dst = new float[w, h];
+        for (int x = 0; x < w; x++)
+            for (int y = 0; y < h; y++)
+                dst[x, y] = src[w - 1 - x, h - 1 - y];
+        return dst;
     }
 
     private static int[,] Rot90CCW(int[,] src)
@@ -268,6 +378,8 @@ internal sealed class OccupancyScan
             BlockCount = blocks,
             CellBoxCount = boxes.Count,
             Boxes = boxes,
+            Shaped = new List<(BoundingBoxI, BlockShapes.Stamp)>(shaped.Count),
+            UnshapedBoxes = new List<BoundingBoxI>(fullBoxes),
         };
 
         // Depth sums accumulate in 1/16-cell units so shaped blocks can
@@ -326,6 +438,7 @@ internal sealed class OccupancyScan
                 // the display field is tone * coverage.
                 foreach (var ob in s.Own)
                 {
+                    scan.UnshapedBoxes.Add(ob);
                     var lo2 = ob.Min - min;
                     var ex2 = ob.Max - ob.Min + new Vector3I(1, 1, 1);
                     for (int x = lo2.X; x < lo2.X + ex2.X && x < size.X; x++)
@@ -342,6 +455,7 @@ internal sealed class OccupancyScan
             }
 
             stamped++;
+            scan.Shaped.Add((aabb, stamp));
             var blo = aabb.Min - min;
             for (int cx = 0; cx < ext.X; cx++)
                 for (int cy = 0; cy < ext.Y; cy++)

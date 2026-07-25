@@ -2,61 +2,63 @@ using Keen.VRage.Library.Mathematics;
 
 namespace GridProbe;
 
-// Per-column depth analysis along one axis: for every (u,v) cell column,
-// merge the occupied intervals and produce three channels:
-//   Filled    - total occupied cells (same as the plain thickness sum)
-//   Runs      - number of separate occupied runs (structural complexity)
-//   Voids     - empty cells strictly between the first and last occupied cell
+// Per-column depth analysis along one axis, at SUB-CELL precision.
+//
+// Every column of the projection is a ray through the ship. Along it, material
+// occupies a set of intervals. Those intervals come from the recovered block
+// geometry with fractional endpoints — a slope entering a cell a third of the
+// way through starts its interval a third of the way through — so every
+// quantity derived from them varies continuously as the geometry does.
+//
+// That continuity is the whole point. Counting whole cells makes these values
+// small integers, and small integers posterize: each count owns a slab of the
+// tone range with unused gaps between. Fractional intervals give genuine
+// gradients that follow the shape, not a blur applied afterwards.
+//
+//   Filled  - total material length (cells, fractional)
+//   Layers  - structural layers crossed, gaps weighted by how open they are
+//   Voids   - enclosed empty length between first and last material
 internal static class DepthChannels
 {
-    public static (int[,] Filled, int[,] Runs, int[,] Voids) Compute(List<BoundingBoxI> boxes, Vector3I min, Vector3I size, int depthAxis)
+    // A gap this wide (in cells) counts as a full extra layer; narrower gaps
+    // count proportionally less. Without this a hairline seam between two
+    // plates would read as a whole extra structural layer, and the value would
+    // jump by one the instant the seam opened.
+    private const float GapScale = 1.5f;
+
+    public readonly struct Span
     {
-        // u/v axes are the two axes other than depthAxis, in the same order the
-        // scan arrays use: top(Y): u=X,v=Z; front(Z): u=X,v=Y; side(X): u=Y,v=Z.
-        (int ua, int va) = depthAxis switch { 1 => (0, 2), 2 => (0, 1), _ => (1, 2) };
-        int uw = Axis(size, ua), vh = Axis(size, va);
+        public readonly int Col;
+        public readonly float D0, D1;
+        public Span(int col, float d0, float d1) { Col = col; D0 = d0; D1 = d1; }
+    }
 
-        // Pass 1: count intervals per column (counting sort layout).
-        var counts = new int[uw * vh];
-        foreach (var b in boxes)
-        {
-            var lo = b.Min - min;
-            var hi = b.Max - min;
-            int u0 = Axis(lo, ua), u1 = Math.Min(uw - 1, Axis(hi, ua));
-            int v0 = Axis(lo, va), v1 = Math.Min(vh - 1, Axis(hi, va));
-            for (int u = u0; u <= u1; u++)
-                for (int v = v0; v <= v1; v++)
-                    counts[u * vh + v]++;
-        }
-        var offsets = new int[uw * vh + 1];
-        for (int i = 0; i < uw * vh; i++) offsets[i + 1] = offsets[i] + counts[i];
-        int total = offsets[uw * vh];
+    public static (float[,] Filled, float[,] Layers, float[,] Voids) Compute(
+        List<Span> spans, int uw, int vh)
+    {
+        var filled = new float[uw, vh];
+        var layers = new float[uw, vh];
+        var voids = new float[uw, vh];
+        if (spans == null || spans.Count == 0) return (filled, layers, voids);
 
-        // Pass 2: place (start,end) depth intervals.
-        var starts = new short[total];
-        var ends = new short[total];
-        var fill = new int[uw * vh];
-        foreach (var b in boxes)
+        // Counting sort into per-column runs.
+        int cols = uw * vh;
+        var counts = new int[cols];
+        foreach (var s in spans) counts[s.Col]++;
+        var offsets = new int[cols + 1];
+        for (int i = 0; i < cols; i++) offsets[i + 1] = offsets[i] + counts[i];
+
+        var d0 = new float[spans.Count];
+        var d1 = new float[spans.Count];
+        var fill = new int[cols];
+        foreach (var s in spans)
         {
-            var lo = b.Min - min;
-            var hi = b.Max - min;
-            int u0 = Axis(lo, ua), u1 = Math.Min(uw - 1, Axis(hi, ua));
-            int v0 = Axis(lo, va), v1 = Math.Min(vh - 1, Axis(hi, va));
-            short d0 = (short)Axis(lo, depthAxis), d1 = (short)Axis(hi, depthAxis);
-            for (int u = u0; u <= u1; u++)
-                for (int v = v0; v <= v1; v++)
-                {
-                    int col = u * vh + v;
-                    int slot = offsets[col] + fill[col]++;
-                    starts[slot] = d0;
-                    ends[slot] = d1;
-                }
+            int slot = offsets[s.Col] + fill[s.Col]++;
+            d0[slot] = s.D0;
+            d1[slot] = s.D1;
         }
 
-        var filled = new int[uw, vh];
-        var runs = new int[uw, vh];
-        var voids = new int[uw, vh];
-        var idx = new List<int>(16);
+        var order = new int[32];
         for (int u = 0; u < uw; u++)
             for (int v = 0; v < vh; v++)
             {
@@ -65,32 +67,39 @@ internal static class DepthChannels
                 if (n == 0) continue;
                 int off = offsets[col];
 
-                idx.Clear();
-                for (int i = 0; i < n; i++) idx.Add(off + i);
-                idx.Sort((a, b) => starts[a].CompareTo(starts[b]));
+                if (order.Length < n) order = new int[Math.Max(n, order.Length * 2)];
+                for (int i = 0; i < n; i++) order[i] = off + i;
+                Array.Sort(order, 0, n, Comparer<int>.Create((a, b) => d0[a].CompareTo(d0[b])));
 
-                int runCount = 0, filledCells = 0;
-                int curStart = starts[idx[0]], curEnd = ends[idx[0]];
-                int first = curStart;
+                float curStart = d0[order[0]], curEnd = d1[order[0]];
+                float first = curStart;
+                float material = 0f;
+                float layerSum = 1f;   // the first run is always one layer
+
                 for (int i = 1; i < n; i++)
                 {
-                    int s = starts[idx[i]], e = ends[idx[i]];
-                    if (s <= curEnd + 1) { if (e > curEnd) curEnd = e; }
+                    float s = d0[order[i]], e = d1[order[i]];
+                    if (s <= curEnd + 1e-4f)
+                    {
+                        if (e > curEnd) curEnd = e;
+                    }
                     else
                     {
-                        runCount++; filledCells += curEnd - curStart + 1;
+                        material += curEnd - curStart;
+                        // Weight the gap by how open it is, so the value moves
+                        // smoothly as a gap widens instead of stepping.
+                        float gap = s - curEnd;
+                        layerSum += 1f - MathF.Exp(-gap / GapScale);
                         curStart = s; curEnd = e;
                     }
                 }
-                runCount++; filledCells += curEnd - curStart + 1;
-                int span = curEnd - first + 1;
+                material += curEnd - curStart;
+                float span = curEnd - first;
 
-                filled[u, v] = filledCells;
-                runs[u, v] = runCount;
-                voids[u, v] = Math.Max(0, span - filledCells);
+                filled[u, v] = material;
+                layers[u, v] = layerSum;
+                voids[u, v] = Math.Max(0f, span - material);
             }
-        return (filled, runs, voids);
+        return (filled, layers, voids);
     }
-
-    private static int Axis(Vector3I v, int a) => a == 0 ? v.X : a == 1 ? v.Y : v.Z;
 }

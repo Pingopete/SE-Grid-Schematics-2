@@ -235,8 +235,8 @@ internal static class VectorLcd
             PanelState.ViewSide => scan.Side,
             _ => scan.Front,                    // Front array = collapse Y = top-down deck plan
         };
-        if (st.Mode != PanelState.ModeThickness && scan.ChannelAxis == depthAxis)
-            view = st.Mode == PanelState.ModeComplexity ? scan.ChRuns : scan.ChVoids;
+        // Mode selection happens in the tone field; this array only supplies the
+        // view dimensions and the last-ditch fallback fill.
         int vw = view.GetLength(0), vh = view.GetLength(1);
         int maxV = 1;
         for (int x = 0; x < vw; x++) for (int y = 0; y < vh; y++) if (view[x, y] > maxV) maxV = view[x, y];
