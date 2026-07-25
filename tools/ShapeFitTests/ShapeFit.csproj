@@ -13,5 +13,7 @@
     <Reference Include="Game2.Simulation"><HintPath>$(SE2)\Game2.Simulation.dll</HintPath></Reference>
     <Compile Include="$(Src)\BlockShapes.cs" Link="BlockShapes.cs" />
     <Compile Include="$(Src)\ProbeLog.cs" Link="ProbeLog.cs" />
+    <Compile Include="$(Src)\Contour.cs" Link="Contour.cs" />
+    <Compile Include="$(Src)\ToneBands.cs" Link="ToneBands.cs" />
   </ItemGroup>
 </Project>

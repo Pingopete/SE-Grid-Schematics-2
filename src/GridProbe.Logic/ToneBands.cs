@@ -115,7 +115,7 @@ internal static class ToneBands
         var loops = Contour.March(field, 0, 0, field.GetLength(0), field.GetLength(1), iso, 80000);
         if (loops.Count == 0) return;
         SharpenCorners(loops, field, iso);
-        Orient(loops, field, iso);
+        Orient(loops);
 
         var band = new Band
         {
@@ -329,41 +329,128 @@ internal static class ToneBands
     }
 
     // Orient loops for nonzero-winding fills: solid-enclosing loops positive,
-    // holes negative — one DrawFill per band renders solids with punched holes.
-    private static void Orient(List<List<(float X, float Y)>> loops, byte[,] field, float iso)
+    // holes negative — one DrawFill per band then renders solids with punched
+    // holes.
+    //
+    // Solidity is decided by NESTING, not by sampling the field. Contour loops
+    // never cross, so material alternates with depth: a loop directly inside an
+    // odd number of others bounds a hole. Reading the field near a loop instead
+    // is unreliable — the cells there carry partial coverage by definition, and
+    // one misread flips a loop's winding so its gap silently fills in.
+    private static void Orient(List<List<(float X, float Y)>> loops)
     {
-        foreach (var loop in loops)
+        int n = loops.Count;
+        var rep = new (float X, float Y)[n];
+        var has = new bool[n];
+        var minX = new float[n]; var maxX = new float[n];
+        var minY = new float[n]; var maxY = new float[n];
+
+        for (int i = 0; i < n; i++)
         {
+            var loop = loops[i];
+            if (loop.Count < 3) continue;
+            float lo = float.MaxValue, hi = float.MinValue, lox = float.MaxValue, hix = float.MinValue;
+            foreach (var p in loop)
+            {
+                if (p.Y < lo) lo = p.Y;
+                if (p.Y > hi) hi = p.Y;
+                if (p.X < lox) lox = p.X;
+                if (p.X > hix) hix = p.X;
+            }
+            minY[i] = lo; maxY[i] = hi; minX[i] = lox; maxX[i] = hix;
+
+            // A point guaranteed strictly inside: crossings along the loop's
+            // mid-height alternate outside/inside, so the centre of the first
+            // interior span always lies within it.
+            float my = (lo + hi) * 0.5f;
+            var xs = new List<float>(8);
+            for (int k = 0; k < loop.Count; k++)
+            {
+                var a = loop[k];
+                var b = loop[(k + 1) % loop.Count];
+                if ((a.Y <= my) == (b.Y <= my)) continue;
+                xs.Add(a.X + (b.X - a.X) * (my - a.Y) / (b.Y - a.Y));
+            }
+            if (xs.Count < 2) continue;
+            xs.Sort();
+            // Just INSIDE the loop's own boundary, not the middle of the span:
+            // a polygon's interior also spans its holes, so a mid-span point can
+            // land inside a nested loop and report the wrong nesting depth.
+            float eps = MathF.Min(0.01f, (xs[1] - xs[0]) * 0.25f);
+            rep[i] = (xs[0] + eps, my);
+            has[i] = true;
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            var loop = loops[i];
             if (loop.Count < 3) continue;
             double area = 0;
-            for (int i = 0; i < loop.Count; i++)
+            for (int k = 0; k < loop.Count; k++)
             {
-                var a = loop[i];
-                var b = loop[(i + 1) % loop.Count];
+                var a = loop[k];
+                var b = loop[(k + 1) % loop.Count];
                 area += a.X * b.Y - b.X * a.Y;
             }
-            if (EnclosesSolid(loop, field, iso) != (area > 0)) loop.Reverse();
+
+            bool solid = true;
+            if (has[i])
+            {
+                int depth = 0;
+                for (int j = 0; j < n; j++)
+                {
+                    if (j == i || loops[j].Count < 3) continue;
+                    if (rep[i].X < minX[j] || rep[i].X > maxX[j] || rep[i].Y < minY[j] || rep[i].Y > maxY[j]) continue;
+                    if (Contains(loops[j], rep[i].X, rep[i].Y)) depth++;
+                }
+                solid = (depth & 1) == 0;
+            }
+            if (solid != (area > 0)) loop.Reverse();
         }
     }
 
-    // Point-in-polygon via mid-height scanline: just right of the leftmost
-    // crossing is inside the loop; solid iff the field there passes the iso.
+    private static bool Contains(List<(float X, float Y)> loop, float px, float py)
+    {
+        bool inside = false;
+        for (int i = 0, j = loop.Count - 1; i < loop.Count; j = i++)
+        {
+            var a = loop[i];
+            var b = loop[j];
+            if (a.Y > py != b.Y > py &&
+                px < (b.X - a.X) * (py - a.Y) / (b.Y - a.Y) + a.X)
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    // Is this loop the boundary of solid material, or of a hole in it?
+    //
+    // Cast a scanline at the loop's mid height and sample the field at the
+    // MIDDLE of the first span inside the loop. Sampling just past the first
+    // crossing instead lands in the boundary cell, whose coverage is partial by
+    // definition — on a diagonal edge it reads as solid about half the time,
+    // which flips a hole's winding so it never punches and the gap fills in.
     private static bool EnclosesSolid(List<(float X, float Y)> loop, byte[,] field, float iso)
     {
         float minY = float.MaxValue, maxY = float.MinValue;
         foreach (var p in loop) { if (p.Y < minY) minY = p.Y; if (p.Y > maxY) maxY = p.Y; }
         float my = (minY + maxY) / 2f;
-        float bestX = float.MaxValue;
+
+        var xs = new List<float>(8);
         for (int i = 0; i < loop.Count; i++)
         {
             var a = loop[i];
             var b = loop[(i + 1) % loop.Count];
             if ((a.Y <= my) == (b.Y <= my)) continue;
-            float x = a.X + (b.X - a.X) * (my - a.Y) / (b.Y - a.Y);
-            if (x < bestX) bestX = x;
+            xs.Add(a.X + (b.X - a.X) * (my - a.Y) / (b.Y - a.Y));
         }
-        if (bestX == float.MaxValue) return true;
-        int cx = Math.Clamp((int)(bestX + 0.35f), 0, field.GetLength(0) - 1);
+        if (xs.Count < 2) return true;
+        xs.Sort();
+
+        // Crossings alternate outside/inside, so [xs0, xs1] is interior. Sample
+        // its centre — the point furthest from either edge.
+        float sx = (xs[0] + xs[1]) * 0.5f;
+        int cx = Math.Clamp((int)sx, 0, field.GetLength(0) - 1);
         int cy = Math.Clamp((int)my, 0, field.GetLength(1) - 1);
         return field[cx, cy] >= iso;
     }

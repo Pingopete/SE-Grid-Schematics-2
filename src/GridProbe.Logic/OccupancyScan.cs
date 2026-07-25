@@ -27,9 +27,6 @@ internal sealed class OccupancyScan
     public volatile int ChannelAxis = -1;
     public int[,] ChFilled, ChRuns, ChVoids;
 
-    // Silhouette loops for one UI view at a time, built on the worker thread.
-    public volatile int ContourAxis = -1;
-    public List<List<(float X, float Y)>> ContourLoops;
 
     // Cached iso-band vector geometry per (view, mode) — the single renderer
     // for all zoom levels. Built on worker threads only.
@@ -101,63 +98,6 @@ internal sealed class OccupancyScan
             for (int y = 0; y < h; y++)
                 if (a[x, y] != b[x, y]) return false;
         return true;
-    }
-
-    public void EnsureContours(int viewAxis)
-    {
-        if (ContourAxis == viewAxis) return;
-        var cov = viewAxis switch
-        {
-            PanelState.ViewFront => CovTop,
-            PanelState.ViewSide => CovSide,
-            _ => CovFront,
-        };
-        if (cov == null) return;
-        var sw = Stopwatch.StartNew();
-        var loops = Contour.March(cov, 0, 0, cov.GetLength(0), cov.GetLength(1), BlockShapes.FracUnits / 2f);
-        // Orient loops for nonzero-winding fills: solid-enclosing loops positive,
-        // holes negative — a single DrawFill then renders smooth-edged solids.
-        foreach (var loop in loops)
-        {
-            if (loop.Count < 3) continue;
-            double area = 0;
-            for (int i = 0; i < loop.Count; i++)
-            {
-                var a = loop[i];
-                var b = loop[(i + 1) % loop.Count];
-                area += a.X * b.Y - b.X * a.Y;
-            }
-            bool solidInside = LoopEnclosesSolid(loop, cov);
-            if (solidInside != (area > 0)) loop.Reverse();
-        }
-        ContourLoops = loops;
-        ContourAxis = viewAxis;
-        int pts = 0; foreach (var l in loops) pts += l.Count;
-        ProbeLog.Line($"Contours view {viewAxis}: {loops.Count} loops, {pts} points, {sw.Elapsed.TotalMilliseconds:F1} ms.");
-    }
-
-    // Point-in-polygon via mid-height scanline: the first crossing's right side
-    // is inside the loop; solid iff coverage there passes the iso threshold.
-    private static bool LoopEnclosesSolid(List<(float X, float Y)> loop, byte[,] cov)
-    {
-        float minY = float.MaxValue, maxY = float.MinValue;
-        foreach (var p in loop) { if (p.Y < minY) minY = p.Y; if (p.Y > maxY) maxY = p.Y; }
-        float my = (minY + maxY) / 2f;
-        float bestX = float.MaxValue;
-        for (int i = 0; i < loop.Count; i++)
-        {
-            var a = loop[i];
-            var b = loop[(i + 1) % loop.Count];
-            if ((a.Y <= my) == (b.Y <= my)) continue;
-            float x = a.X + (b.X - a.X) * (my - a.Y) / (b.Y - a.Y);
-            if (x < bestX) bestX = x;
-        }
-        if (bestX == float.MaxValue) return true;
-        int cx = (int)Math.Floor(bestX + 0.35f - 0.5f + 0.5f);
-        int cy = (int)Math.Floor(my - 0.5f + 0.5f);
-        cx = Math.Clamp((int)(bestX + 0.35f), 0, cov.GetLength(0) - 1);
-        cy = Math.Clamp((int)my, 0, cov.GetLength(1) - 1);
-        return cov[cx, cy] >= BlockShapes.FracUnits / 2f;
     }
 
     private readonly object _chLock = new();

@@ -117,5 +117,101 @@ Case("staircase", (x, y, z) =>
     return y + 0.5f <= (step + 1) * 0.2f;
 }, 10, false);
 
-Console.WriteLine(failures == 0 ? "\nALL SHAPE TESTS PASSED" : $"\n{failures} SHAPE TESTS FAILED");
+// ---------------------------------------------------------------------------
+// Band rendering: holes in the structure must stay empty.
+//
+// Open framework — a truss with diagonal members — is the case that exposes
+// hole handling, because every gap is bounded by diagonal edges whose boundary
+// cells carry partial coverage.
+Console.WriteLine("\n--- band holes (gaps must not fill) ---");
+
+int W = 120, H = 60;
+var cov = new byte[W, H];
+var tone = new byte[W, H];
+bool Solid(int x, int y)
+{
+    if (y < 6 || y >= H - 6) return true;                       // top and bottom decks
+    int local = x % 30;
+    int span = H - 12;
+    int rel = y - 6;
+    // Diagonal web members forming triangular voids, like ship girders.
+    int a = (int)(rel * 15.0 / span);
+    return local < 4 || Math.Abs(local - 15 - a) < 4 || Math.Abs(local - 15 + a) < 4;
+}
+for (int x = 0; x < W; x++)
+    for (int y = 0; y < H; y++)
+        if (Solid(x, y)) { cov[x, y] = (byte)BlockShapes.FracUnits; tone[x, y] = 200; }
+
+var bands = ToneBands.Build(tone, cov);
+Console.WriteLine($"     bands={bands.Bands.Count}");
+foreach (var bd in bands.Bands)
+{
+    var areas = new List<string>();
+    foreach (var lp in bd.Loops)
+    {
+        var p = lp.L[0];
+        int m = p.Length / 2;
+        double ar = 0;
+        for (int i = 0; i < m; i++)
+        {
+            int j = (i + 1) % m;
+            ar += p[i * 2] * p[j * 2 + 1] - p[j * 2] * p[i * 2 + 1];
+        }
+        areas.Add($"{ar / 2:F0}");
+    }
+    Console.WriteLine($"     band alpha={bd.Alpha} loops={bd.Loops.Count} areas=[{string.Join(", ", areas.Take(12))}]");
+}
+
+// Rasterize the bands the way the renderer does: nonzero winding per band.
+bool Covered(int px, int py)
+{
+    float fx = px + 0.5f, fy = py + 0.5f;
+    foreach (var band in bands.Bands)
+    {
+        int winding = 0;
+        foreach (var loop in band.Loops)
+        {
+            var pts = loop.L[0];
+            int m = pts.Length / 2;
+            for (int i = 0; i < m; i++)
+            {
+                float ax = pts[i * 2], ay = pts[i * 2 + 1];
+                float bx = pts[((i + 1) % m) * 2], by = pts[((i + 1) % m) * 2 + 1];
+                if (ay <= fy)
+                {
+                    if (by > fy && (bx - ax) * (fy - ay) - (fx - ax) * (by - ay) > 0) winding++;
+                }
+                else if (by <= fy && (bx - ax) * (fy - ay) - (fx - ax) * (by - ay) < 0) winding--;
+            }
+        }
+        if (winding != 0) return true;
+    }
+    return false;
+}
+
+int emptyFilled = 0, solidMissing = 0, emptyTotal = 0, solidTotal = 0;
+for (int x = 2; x < W - 2; x++)
+    for (int y = 2; y < H - 2; y++)
+    {
+        // Ignore cells adjacent to an edge: those are legitimately partial.
+        bool s = Solid(x, y);
+        bool nearEdge = false;
+        for (int dx = -1; dx <= 1 && !nearEdge; dx++)
+            for (int dy = -1; dy <= 1 && !nearEdge; dy++)
+                if (Solid(x + dx, y + dy) != s) nearEdge = true;
+        if (nearEdge) continue;
+        if (s) { solidTotal++; if (!Covered(x, y)) solidMissing++; }
+        else { emptyTotal++; if (Covered(x, y)) emptyFilled++; }
+    }
+
+double fillPct = emptyTotal == 0 ? 0 : 100.0 * emptyFilled / emptyTotal;
+double missPct = solidTotal == 0 ? 0 : 100.0 * solidMissing / solidTotal;
+bool holesOk = fillPct < 1.0;
+bool solidOk = missPct < 1.0;
+Console.WriteLine($"{(holesOk ? "ok  " : "FAIL")} truss gaps stay empty: {fillPct:F1}% of empty area filled ({emptyFilled}/{emptyTotal})");
+Console.WriteLine($"{(solidOk ? "ok  " : "FAIL")} structure stays drawn: {missPct:F1}% of solid area missing ({solidMissing}/{solidTotal})");
+if (!holesOk) failures++;
+if (!solidOk) failures++;
+
+Console.WriteLine(failures == 0 ? "\nALL GEOMETRY TESTS PASSED" : $"\n{failures} GEOMETRY TESTS FAILED");
 return failures == 0 ? 0 : 1;
