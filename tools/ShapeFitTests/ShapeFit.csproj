@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <SE2>D:\SteamLibrary\steamapps\common\SpaceEngineers2\Game2</SE2>
+    <Src>D:\Projects\Space Engineers Stuff\Grid Schematics 2\src\GridProbe.Logic</Src>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="VRage.Library"><HintPath>$(SE2)\VRage.Library.dll</HintPath></Reference>
+    <Reference Include="Game2.Simulation"><HintPath>$(SE2)\Game2.Simulation.dll</HintPath></Reference>
+    <Compile Include="$(Src)\BlockShapes.cs" Link="BlockShapes.cs" />
+    <Compile Include="$(Src)\ProbeLog.cs" Link="ProbeLog.cs" />
+  </ItemGroup>
+</Project>

@@ -367,20 +367,24 @@ internal sealed class OccupancyScan
 
             if (stamp == null)
             {
-                // Class fell back to Full: use the block's own cell boxes.
+                // No analytic solid recovered (genuinely open/irregular geometry):
+                // use the block's own cell boxes, which are solid cells and must
+                // set coverage exactly like any other solid box. Omitting the
+                // coverage write here made every such block invisible, because
+                // the display field is tone * coverage.
                 foreach (var ob in s.Own)
                 {
                     var lo2 = ob.Min - min;
                     var ex2 = ob.Max - ob.Min + new Vector3I(1, 1, 1);
                     for (int x = lo2.X; x < lo2.X + ex2.X && x < size.X; x++)
                         for (int y = lo2.Y; y < lo2.Y + ex2.Y && y < size.Y; y++)
-                            scan.Top[x, y] += ex2.Z * F;
+                        { scan.Top[x, y] += ex2.Z * F; scan.CovTop[x, y] = F; }
                     for (int y = lo2.Y; y < lo2.Y + ex2.Y && y < size.Y; y++)
                         for (int z = lo2.Z; z < lo2.Z + ex2.Z && z < size.Z; z++)
-                            scan.Side[y, z] += ex2.X * F;
+                        { scan.Side[y, z] += ex2.X * F; scan.CovSide[y, z] = F; }
                     for (int x = lo2.X; x < lo2.X + ex2.X && x < size.X; x++)
                         for (int z = lo2.Z; z < lo2.Z + ex2.Z && z < size.Z; z++)
-                            scan.Front[x, z] += ex2.Y * F;
+                        { scan.Front[x, z] += ex2.Y * F; scan.CovFront[x, z] = F; }
                 }
                 continue;
             }

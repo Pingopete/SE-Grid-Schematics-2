@@ -19,15 +19,58 @@ textures whose pixels run out when you zoom in, and no separate "zoomed in" and
 orthographic projections (top / side / front).
 
 - Blocks that fill their bounding box stamp their cells directly.
-- Blocks that don't are handed to `BlockShapes`, which fits them against analytic
-  solids (wedge, tetra, corner prism, half slab, ...) in all 24 orientations,
-  scoring against the block's own cell boxes. A fit needs IoU ≥ 0.85 **and** must
-  beat the solid-block baseline by 0.05 — volume correlation alone would let a
-  refinery "fit" a corner and fabricate geometry that isn't there.
-- Fitted blocks stamp **fractional** coverage at 1/16 cell. This is what makes a
-  ramp a real diagonal in the data instead of a staircase.
+- Blocks that don't are handed to `BlockShapes`, which **recovers the block's
+  analytic solid from its own voxel data** (see below).
+- Recovered blocks stamp **fractional** coverage at 1/16 cell. This is what makes
+  a ramp a real diagonal in the data instead of a staircase.
+- Blocks with no analytic solid fall back to their own cell boxes — which are
+  solid cells, and must therefore write the coverage field just like any other
+  solid box. (Omitting that made every such block invisible, since the display
+  field is `tone × coverage`.)
 
 Output per view: an integer thickness field and a byte coverage field (0–16).
+
+#### Recovering block geometry
+
+The engine voxelizes every block into 25 cm cells — a 2.5 m block is 10×10×10.
+A flat face cutting through that grid leaves a staircase, but the staircase still
+encodes the exact plane that produced it. So rather than guessing which canonical
+solid a block resembles, the solid is recovered directly as an intersection of
+half-spaces:
+
+1. For each candidate direction (integer normals, gcd-reduced), take the
+   **tightest plane that still contains every occupied cell** — its supporting
+   plane. Its offset is placed midway between the outermost occupied cell centre
+   and the first empty cell beyond, because that is where the true surface must lie.
+2. Prefer the **simplest explanation**: if one plane accounts for every empty
+   cell, that is the block's face. Several plane sets can reproduce identical
+   voxel data while implying different surfaces, and adding planes carves detail
+   the block doesn't have.
+3. Otherwise cover the empty cells with as few planes as possible, counting only
+   cells a plane genuinely *excludes*.
+4. Directions up to ±2 are tried first (faces, 45s, 1:2 long slopes, corner
+   diagonals), escalating to ±4 when that fails or needs more planes than a
+   better-angled single cut would.
+
+A block is convex exactly when the recovered hull leaves no empty cell
+unaccounted for. Trusses, handrails, stairs and drills fail that test and keep
+their cell boxes, which for those shapes is the honest answer.
+
+Two subtleties matter:
+
+- **Quantisation ambiguity.** A cell whose centre lies within a fraction of a
+  cell of the surface is a coin flip — the engine's own voxelizer had to round it
+  one way. Those cells are tolerated when judging a single-plane fit. The
+  tolerance must *not* be applied per-plane during multi-plane selection, or
+  several planes each claim cells none of them removes, and a staircase passes as
+  a convex solid.
+- **Precision limit.** Cell data localises a surface to about half a cell, so
+  multi-plane solids carry a few percent sub-cell coverage error. Single-plane
+  shapes — most of the armour set — come back exact.
+
+Verified against voxelized ground truth in `scratchpad/ShapeFit`: 1:1, 1:2, 2:1
+and 3:4 slopes, corners, tips, inverted corners and half slabs all recover with
+0.00% coverage error; trusses and staircases are correctly rejected.
 
 Scans are reused. `ContentEquals` compares extents, counts and all three
 projections; if nothing changed, the previous scan object is kept and every cache
