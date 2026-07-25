@@ -30,6 +30,26 @@ orthographic projections (top / side / front).
 
 Output per view: an integer thickness field and a byte coverage field (0–16).
 
+#### Thickness is volume, coverage is area
+
+These are different quantities and must be accumulated differently.
+
+**Thickness** sums each cell's volume fraction along the view ray — how much
+material a ray passes through.
+
+**Coverage** is the fraction of a cell's *projected* area that any material
+covers. It is built by unioning 4×4 projected sub-masks, which each block's
+stamp carries per cell (`Stamp.MaskXY/MaskYZ/MaskXZ`).
+
+Using volume for coverage — taking a max of per-cell fill along the ray — is
+wrong twice over: a cell sliced corner-to-corner by a slope is half full by
+volume yet completely opaque when viewed along the slice, and two blocks can
+cover complementary halves of one cell. Both under-count, which feathers what
+should be a one-cell edge transition into a multi-cell ramp
+(`48, 64, 80, 128, 160, 192, 208, 255` across a single 45° edge). The contour
+then wanders inside that ramp, cutting small notches into diagonal members.
+Unioning projected sub-masks gives `0, 0, 255, 255` — a sharp edge.
+
 #### Recovering block geometry
 
 The engine voxelizes every block into 25 cm cells — a 2.5 m block is 10×10×10.

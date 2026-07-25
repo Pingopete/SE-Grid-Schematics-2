@@ -36,7 +36,7 @@ internal static class BlockShapes
     }
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<object, DefShape> _defs = new();
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(object Def, int Basis, int X, int Y, int Z), byte[,,]> _stamps = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(object Def, int Basis, int X, int Y, int Z), Stamp> _stamps = new();
     // Integer normals up to +-2 cover the usual armour angles (faces, 45s,
     // 1:2 long slopes, corner diagonals); +-4 is the fallback for anything
     // built to a less common ratio.
@@ -55,7 +55,7 @@ internal static class BlockShapes
 
     // Fractional stamp for this block, or null when no analytic solid was
     // recovered (caller uses the block's own cell boxes).
-    public static byte[,,] GetStamp(object defKey, IntegerOrientation orient, Vector3I ext, Func<List<(Vector3I Lo, Vector3I Hi)>> ownBoxesRel)
+    public static Stamp GetStamp(object defKey, IntegerOrientation orient, Vector3I ext, Func<List<(Vector3I Lo, Vector3I Hi)>> ownBoxesRel)
     {
         if (defKey == null) return null;
         var basis = BasisOf(orient);
@@ -273,17 +273,37 @@ internal static class BlockShapes
         catch { return "?"; }
     }
 
-    // Sub-cell coverage by supersampling the recovered half-space intersection.
-    private static byte[,,] BuildStamp(float[] planes, sbyte[] basis, Vector3I ext)
+    // A block's contribution to a scan, sampled below cell resolution.
+    //
+    // Fill is the cell's VOLUME fraction, which is what thickness sums want.
+    // Coverage wants something different: the fraction of a cell's PROJECTED
+    // area that any material covers when viewed down an axis. Those are not the
+    // same number — a cell sliced corner-to-corner by a slope is half full by
+    // volume yet completely opaque when viewed along the slice. Collapsing the
+    // sub-samples per axis keeps both answers honest.
+    public sealed class Stamp
+    {
+        public byte[,,] Fill;                    // 0..FracUnits, volume fraction
+        public ushort[,,] MaskXY, MaskYZ, MaskXZ; // 4x4 projected sub-masks per cell
+    }
+
+    private static Stamp BuildStamp(float[] planes, sbyte[] basis, Vector3I ext)
     {
         const int K = 4;
         int pc = planes.Length / 4;
-        var stamp = new byte[ext.X, ext.Y, ext.Z];
+        var s = new Stamp
+        {
+            Fill = new byte[ext.X, ext.Y, ext.Z],
+            MaskXY = new ushort[ext.X, ext.Y, ext.Z],
+            MaskYZ = new ushort[ext.X, ext.Y, ext.Z],
+            MaskXZ = new ushort[ext.X, ext.Y, ext.Z],
+        };
         for (int cx = 0; cx < ext.X; cx++)
             for (int cy = 0; cy < ext.Y; cy++)
                 for (int cz = 0; cz < ext.Z; cz++)
                 {
                     int hits = 0;
+                    int mXY = 0, mYZ = 0, mXZ = 0;
                     for (int i = 0; i < K; i++)
                         for (int j = 0; j < K; j++)
                             for (int k = 0; k < K; k++)
@@ -296,11 +316,18 @@ internal static class BlockShapes
                                 for (int p = 0; p < pc && inside; p++)
                                     if (planes[p * 4] * l.X + planes[p * 4 + 1] * l.Y + planes[p * 4 + 2] * l.Z > planes[p * 4 + 3])
                                         inside = false;
-                                if (inside) hits++;
+                                if (!inside) continue;
+                                hits++;
+                                mXY |= 1 << (i * K + j);   // collapse Z
+                                mYZ |= 1 << (j * K + k);   // collapse X
+                                mXZ |= 1 << (i * K + k);   // collapse Y
                             }
-                    stamp[cx, cy, cz] = (byte)Math.Round(hits / (float)(K * K * K) * FracUnits);
+                    s.Fill[cx, cy, cz] = (byte)Math.Round(hits / (float)(K * K * K) * FracUnits);
+                    s.MaskXY[cx, cy, cz] = (ushort)mXY;
+                    s.MaskYZ[cx, cy, cz] = (ushort)mYZ;
+                    s.MaskXZ[cx, cy, cz] = (ushort)mXZ;
                 }
-        return stamp;
+        return s;
     }
 
     // Integer normals up to +-range, gcd-reduced and de-duplicated.

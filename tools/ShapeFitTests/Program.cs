@@ -52,6 +52,7 @@ void Case(string name, Func<float, float, float, bool> inside, int n, bool expec
     }
 
     // Compare recovered sub-cell coverage against the true solid, sampled 4^3.
+    var fill = stamp.Fill;
     const int K = 4;
     double err = 0; int cells = 0; int worstCell = 0;
     for (int x = 0; x < n; x++)
@@ -69,7 +70,7 @@ void Case(string name, Func<float, float, float, bool> inside, int n, bool expec
                             if (inside(px, py, pz)) hits++;
                         }
                 int want = (int)Math.Round(hits / (float)(K * K * K) * BlockShapes.FracUnits);
-                int got = stamp[x, y, z];
+                int got = fill[x, y, z];
                 int d = Math.Abs(want - got);
                 if (d > worstCell) worstCell = d;
                 err += d;
@@ -116,6 +117,50 @@ Case("staircase", (x, y, z) =>
     int step = (int)Math.Floor((z + 0.5f) * 5f);
     return y + 0.5f <= (step + 1) * 0.2f;
 }, 10, false);
+
+// ---------------------------------------------------------------------------
+// Projected coverage must be PROJECTED AREA, not volume.
+//
+// A slope viewed along the axis its face slices through is fully opaque even
+// though every boundary cell is only half full by volume. Using volume here
+// under-counts the edge and feathers a one-cell transition into a ramp.
+Console.WriteLine("\n--- projected coverage (area, not volume) ---");
+{
+    int n = 10;
+    // Wedge cut in the X-Y plane; Z is untouched, so viewed along X every cell
+    // that holds any material projects as fully covered.
+    var boxes = Voxelize((x, y, z) => x + y <= 0f, n);
+    var orient = new IntegerOrientation(Base6Directions.Direction.Forward, Base6Directions.Direction.Up);
+    var st = BlockShapes.GetStamp(new object(), orient, new Vector3I(n, n, n), () => boxes);
+    if (st == null)
+    {
+        Console.WriteLine("FAIL projected coverage: wedge did not resolve");
+        failures++;
+    }
+    else
+    {
+        // Union the projected masks down X, exactly as the scan does.
+        int badEdge = 0, checkedCols = 0;
+        for (int y = 0; y < n; y++)
+            for (int z = 0; z < n; z++)
+            {
+                int mask = 0, volMax = 0;
+                for (int x = 0; x < n; x++)
+                {
+                    mask |= st.MaskYZ[x, y, z];
+                    if (st.Fill[x, y, z] > volMax) volMax = st.Fill[x, y, z];
+                }
+                if (mask == 0) continue;
+                checkedCols++;
+                int projected = System.Numerics.BitOperations.PopCount((uint)mask);
+                // Any column with material somewhere along X is opaque here.
+                if (projected != BlockShapes.FracUnits) badEdge++;
+            }
+        bool ok = badEdge == 0 && checkedCols > 0;
+        Console.WriteLine($"{(ok ? "ok  " : "FAIL")} occupied columns read as fully covered: {checkedCols - badEdge}/{checkedCols}");
+        if (!ok) failures++;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Band rendering: holes in the structure must stay empty.

@@ -272,20 +272,32 @@ internal sealed class OccupancyScan
 
         // Depth sums accumulate in 1/16-cell units so shaped blocks can
         // contribute fractional coverage (smooth slopes IN the data).
+        //
+        // Coverage is built as a UNION of projected sub-cell masks, not a max of
+        // per-cell volume fractions. Volume is the wrong quantity to project: a
+        // cell sliced by a slope is half full yet fully opaque along the slice,
+        // and two blocks can cover complementary halves of the same cell. Taking
+        // a max of volumes under-counts both, which feathers what should be a
+        // one-cell-wide edge into a multi-cell ramp.
         const int F = BlockShapes.FracUnits;
+        const ushort FullMask = 0xFFFF;
+        var mTop = new ushort[size.X, size.Y];
+        var mSide = new ushort[size.Y, size.Z];
+        var mFront = new ushort[size.X, size.Z];
+
         foreach (var b in fullBoxes)
         {
             var lo = b.Min - min;
             var ext = b.Max - b.Min + new Vector3I(1, 1, 1);
             for (int x = lo.X; x < lo.X + ext.X && x < size.X; x++)
                 for (int y = lo.Y; y < lo.Y + ext.Y && y < size.Y; y++)
-                { scan.Top[x, y] += ext.Z * F; scan.CovTop[x, y] = F; }
+                { scan.Top[x, y] += ext.Z * F; mTop[x, y] = FullMask; }
             for (int y = lo.Y; y < lo.Y + ext.Y && y < size.Y; y++)
                 for (int z = lo.Z; z < lo.Z + ext.Z && z < size.Z; z++)
-                { scan.Side[y, z] += ext.X * F; scan.CovSide[y, z] = F; }
+                { scan.Side[y, z] += ext.X * F; mSide[y, z] = FullMask; }
             for (int x = lo.X; x < lo.X + ext.X && x < size.X; x++)
                 for (int z = lo.Z; z < lo.Z + ext.Z && z < size.Z; z++)
-                { scan.Front[x, z] += ext.Y * F; scan.CovFront[x, z] = F; }
+                { scan.Front[x, z] += ext.Y * F; mFront[x, z] = FullMask; }
         }
 
         int stamped = 0;
@@ -293,7 +305,7 @@ internal sealed class OccupancyScan
         {
             var aabb = s.Aabb;
             var ext = aabb.Max - aabb.Min + new Vector3I(1, 1, 1);
-            byte[,,] stamp = null;
+            BlockShapes.Stamp stamp = null;
             try
             {
                 stamp = BlockShapes.GetStamp(s.Def, s.Orient, ext, () =>
@@ -318,13 +330,13 @@ internal sealed class OccupancyScan
                     var ex2 = ob.Max - ob.Min + new Vector3I(1, 1, 1);
                     for (int x = lo2.X; x < lo2.X + ex2.X && x < size.X; x++)
                         for (int y = lo2.Y; y < lo2.Y + ex2.Y && y < size.Y; y++)
-                        { scan.Top[x, y] += ex2.Z * F; scan.CovTop[x, y] = F; }
+                        { scan.Top[x, y] += ex2.Z * F; mTop[x, y] = FullMask; }
                     for (int y = lo2.Y; y < lo2.Y + ex2.Y && y < size.Y; y++)
                         for (int z = lo2.Z; z < lo2.Z + ex2.Z && z < size.Z; z++)
-                        { scan.Side[y, z] += ex2.X * F; scan.CovSide[y, z] = F; }
+                        { scan.Side[y, z] += ex2.X * F; mSide[y, z] = FullMask; }
                     for (int x = lo2.X; x < lo2.X + ex2.X && x < size.X; x++)
                         for (int z = lo2.Z; z < lo2.Z + ex2.Z && z < size.Z; z++)
-                        { scan.Front[x, z] += ex2.Y * F; scan.CovFront[x, z] = F; }
+                        { scan.Front[x, z] += ex2.Y * F; mFront[x, z] = FullMask; }
                 }
                 continue;
             }
@@ -335,18 +347,29 @@ internal sealed class OccupancyScan
                 for (int cy = 0; cy < ext.Y; cy++)
                     for (int cz = 0; cz < ext.Z; cz++)
                     {
-                        int f = stamp[cx, cy, cz];
+                        int f = stamp.Fill[cx, cy, cz];
                         if (f == 0) continue;
                         int gx = blo.X + cx, gy = blo.Y + cy, gz = blo.Z + cz;
                         if (gx < 0 || gy < 0 || gz < 0 || gx >= size.X || gy >= size.Y || gz >= size.Z) continue;
                         scan.Top[gx, gy] += f;
                         scan.Side[gy, gz] += f;
                         scan.Front[gx, gz] += f;
-                        if (f > scan.CovTop[gx, gy]) scan.CovTop[gx, gy] = (byte)f;
-                        if (f > scan.CovSide[gy, gz]) scan.CovSide[gy, gz] = (byte)f;
-                        if (f > scan.CovFront[gx, gz]) scan.CovFront[gx, gz] = (byte)f;
+                        mTop[gx, gy] |= stamp.MaskXY[cx, cy, cz];
+                        mSide[gy, gz] |= stamp.MaskYZ[cx, cy, cz];
+                        mFront[gx, gz] |= stamp.MaskXZ[cx, cy, cz];
                     }
         }
+
+        // Collapse the unioned sub-masks into 0..16 coverage.
+        for (int x = 0; x < size.X; x++)
+            for (int y = 0; y < size.Y; y++)
+                scan.CovTop[x, y] = (byte)System.Numerics.BitOperations.PopCount(mTop[x, y]);
+        for (int y = 0; y < size.Y; y++)
+            for (int z = 0; z < size.Z; z++)
+                scan.CovSide[y, z] = (byte)System.Numerics.BitOperations.PopCount(mSide[y, z]);
+        for (int x = 0; x < size.X; x++)
+            for (int z = 0; z < size.Z; z++)
+                scan.CovFront[x, z] = (byte)System.Numerics.BitOperations.PopCount(mFront[x, z]);
 
         // Side view reads rotated 90 degrees CW on the panel; rotate all its
         // products CCW at the source so every consumer sees the upright ship.
