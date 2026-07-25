@@ -24,7 +24,10 @@ namespace GridProbe;
 // more vertices than the screen can show.
 internal static class ToneBands
 {
-    public const int Levels = 40;             // tone quantization steps
+    // Bands ARE the output bit depth: within one band the alpha is constant,
+    // so this caps how many greys the panel can show no matter how smooth the
+    // underlying field is. Cost scales linearly with it.
+    public const int Levels = 64;
     private const int MaxSegsPerBand = 15000;
     private const float MinCornerRun = 1.6f;  // straight edge (cells) needed either side of a real corner
     // Cell-space error bound per detail tier. The renderer picks the coarsest

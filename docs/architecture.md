@@ -101,12 +101,35 @@ edited, not on the 2-second scan cadence.
 
 `ToneFields` / `ToneMaps` map the raw data to display brightness:
 
-- **Thickness** — total material along the view ray, sqrt ramp, min-max normalised
-- **Complexity (x-ray)** — counts solid↔void transitions, so structure layers read
-- **Voids** — enclosed empty space made bright over a dim hull ghost
+- **Thickness** — total material along the view ray, sqrt ramp
+- **Complexity (x-ray)** — structural layers crossed, so interior structure reads
+- **Voids** — enclosed empty space emphasised over the structure containing it
 
-Min-max normalisation matters: an earlier version mapped the *most common* value to
-near-invisible, which read as "missing sections of the ship".
+Thickness is measured in sixteenths of a cell, so it is continuous and maps
+straight to a smooth ramp. **Runs and voids are whole-cell counts** — small
+integers — and mapping those directly posterizes the image: each count owns a
+slab of the tone range and leaves unused gaps between them. Measured on a real
+ship, complexity occupied 7 tone bins with *empty* ranges between them, against
+thickness's 13 evenly spread.
+
+Two corrections fix that, both operating on data the geometry scan already
+produces:
+
+- **Smooth the counts across neighbouring columns** (3×3 tent, occupied columns
+  only — averaging across the silhouette would eat the outline). A column
+  crossing 3 layers next to one crossing 4 genuinely is between the two, so this
+  recovers real intermediate values rather than inventing detail.
+- **Set ranges from percentiles, not min/max**, so one outlier column — a deep
+  shaft, a large bay — cannot compress everything else into a narrow band.
+
+Voids additionally puts structure and void on **one continuous ramp** instead of
+two disjoint bands. Previously the hull was confined to 35–75 while voids got
+110–255, which put 81.6% of occupied pixels inside a 40-level band; structure now
+gets a real range and void volume adds brightness on top of it.
+
+Note that the **band count is the output bit depth** — within a band the alpha is
+constant, so it caps how many greys the panel can show however smooth the field
+is. Cost scales linearly with it.
 
 ### 3. Band geometry (background thread, ~50–200 ms, cached)
 
