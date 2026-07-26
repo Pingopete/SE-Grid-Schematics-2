@@ -676,21 +676,27 @@ internal static class VectorLcd
     // winding punches its holes.
     // Two 17-step ramps, left (0) to right (255), read straight off a screenshot.
     //
-    //   ROW 0 — raw response over the full range, 0..255 in steps of 16.
-    //   ROW 1 — raw response over the TOE, 0..16 in steps of 1. Reads off the
-    //           exact value where the panel stops being black. Steps of 16 were
-    //           far too coarse to see this, which is why the dark end kept
-    //           being wrong.
-    //   ROW 2 — raw response over the SHOULDER, 128..255 in steps of 8. Reads
-    //           off the exact value where it reaches white, which is what
-    //           BlitBrightness has to equal.
-    //   ROW 3 — the corrected tone sweep: what the ship is actually drawn on.
+    //   ROW 0 — the corrected tone sweep: what the ship is actually drawn on.
     //           This is the one that should run evenly from black to white.
+    //   ROW 1 — raw response over the full range, 0..255 in steps of 16.
+    //   ROW 2 — raw response over the TOE, 0..16 in steps of 1. Reads off where
+    //           the panel stops being black.
+    //   ROW 3 — raw response over the SHOULDER, 128..255 in steps of 8. Reads
+    //           off where it reaches white, which is what BlitBrightness has to
+    //           equal.
+    //
+    // Rows are separated by black gaps, and the solid-white shoulder row is
+    // last. The panel is emissive and blooms: with the white row directly above
+    // the corrected sweep, it bled into it and lifted its dark end off black.
+    // Two rows that composite to the same value then read differently, which is
+    // what made every reading off this ramp contradict the last one.
     private static void DrawToneRamp(IDrawBatch batch, float W, float H)
     {
         const int Steps = 17;
         const int Rows = 4;
-        float rowH = H * 0.05f;
+        float rowH = H * 0.045f;
+        float gapH = rowH * 0.5f;      // black separator: keeps bloom from one row off the next
+        float pitch = rowH + gapH;
         float cellW = W / Steps;
         var quad = new QuadraticBezier2[4];
 
@@ -707,7 +713,7 @@ internal static class VectorLcd
 
         // Black backing so each patch composites over a known floor, exactly
         // like the ship does over the empty panel.
-        Rect(0f, 0f, W, rowH * Rows, new ColorSRGB((byte)0, (byte)0, (byte)0, (byte)255));
+        Rect(0f, 0f, W, pitch * Rows, new ColorSRGB((byte)0, (byte)0, (byte)0, (byte)255));
 
         byte bb = (byte)BlitBrightness;
         for (int i = 0; i < Steps; i++)
@@ -716,16 +722,16 @@ internal static class VectorLcd
             void Raw(int row, int v)
             {
                 byte c = (byte)Math.Clamp(v, 0, 255);
-                Rect(x0, row * rowH, x1, (row + 1) * rowH, new ColorSRGB(c, c, c, (byte)255));
+                Rect(x0, row * pitch, x1, row * pitch + rowH, new ColorSRGB(c, c, c, (byte)255));
             }
 
-            Raw(0, i * 16);            // full range
-            Raw(1, i);                 // toe, one level per cell
-            Raw(2, 128 + i * 8);       // shoulder
-
-            // The corrected sweep, drawn exactly the way a band is drawn.
+            // Row 0: the corrected sweep, drawn exactly the way a band is drawn.
             int a = (int)Math.Round(255.0 * ToneBands.PanelCurve(Math.Min(255, i * 16) / 255.0));
-            Rect(x0, 3 * rowH, x1, 4 * rowH, new ColorSRGB(bb, bb, bb, (byte)a));
+            Rect(x0, 0f, x1, rowH, new ColorSRGB(bb, bb, bb, (byte)a));
+
+            Raw(1, i * 16);            // full range
+            Raw(2, i);                 // toe, one level per cell
+            Raw(3, 128 + i * 8);       // shoulder, kept last: solid white blooms
         }
     }
 

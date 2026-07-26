@@ -51,9 +51,17 @@ internal static class ToneBands
     // tone-mapping choice: it belongs here, at the boundary, and not smeared
     // through the tone maps where it would corrupt what the modes mean.
     //
-    // Gamma 1.0 is no correction. 2.2 is the value the render read best at, so
-    // it stays put until something is measured well enough to move it.
-    public static volatile float PanelGamma = 2.2f;
+    // Gamma 1.0 is no correction.
+    //
+    // This has to move WITH BlitBrightness, which is what the last round got
+    // wrong. BlitBrightness sets where the top of the range lands; raising it
+    // to reach white lifts every tone below it by the same factor, so the mids
+    // wash out. Gamma is what pulls those mids back down.
+    //
+    // 2.2 at BlitBrightness 100 read best. 2.8 at 128 puts the mid and dark
+    // tones back within a couple of levels of where they were there, while the
+    // top now reaches 128 instead of stopping at 100.
+    public static volatile float PanelGamma = 2.8f;
 
     // Candidates drawn side by side by VectorLcd's test ramp. The correct one
     // is whichever row reads as an EVEN sweep from black to white, because an
