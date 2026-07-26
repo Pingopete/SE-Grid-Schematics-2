@@ -54,10 +54,17 @@ internal static class ToneBands
     // Gamma 1.0 is no correction. The panel's own curve is steeper than 2,
     // but correcting for all of it crushes the hull into flat black — the
     // useful setting sits between.
-    public static volatile float PanelGamma = 1.5f;
+    public static volatile float PanelGamma = 1.85f;
 
-    public static double PanelCurve(double tone01)
-        => Math.Pow(Math.Clamp(tone01, 0.0, 1.0), PanelGamma);
+    // Candidates drawn side by side by VectorLcd's test ramp. The correct one
+    // is whichever row reads as an EVEN sweep from black to white, because an
+    // even sweep means tone and perceived brightness finally agree.
+    public static readonly float[] GammaCandidates = { 1.5f, 2.0f, 2.5f, 3.0f };
+
+    public static double PanelCurve(double tone01) => PanelCurve(tone01, PanelGamma);
+
+    public static double PanelCurve(double tone01, double gamma)
+        => Math.Pow(Math.Clamp(tone01, 0.0, 1.0), gamma);
 
     public struct Loop
     {

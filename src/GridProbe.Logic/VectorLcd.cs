@@ -660,17 +660,22 @@ internal static class VectorLcd
     // winding punches its holes.
     // Two 17-step ramps, left (0) to right (255), read straight off a screenshot.
     //
-    //   TOP row    — stepping alpha through the SAME response correction the
-    //                bands use, so this is the curve the ship is drawn on. It
-    //                should read as an even black-to-white sweep.
-    //   BOTTOM row — stepping GREY at full alpha: the panel's raw response,
+    //   ROW 0      — stepping GREY at full alpha: the panel's raw response,
     //                uncorrected. It is not even, and that is the point — its
-    //                dark end lifts off black almost immediately and its top
-    //                half is one indistinguishable white.
+    //                dark end lifts off black almost immediately.
+    //   ROWS 1..n  — the same tone sweep through each candidate gamma, drawn
+    //                exactly the way a band is drawn.
+    //
+    // The correct gamma is whichever row reads as an EVEN sweep from black to
+    // white. That is the whole measurement: an even sweep means tone and
+    // perceived brightness agree, so the ship's shading finally means what the
+    // tone field says it means. Reading one row against the others in a single
+    // screenshot beats bisecting one number across several rebuilds.
     private static void DrawToneRamp(IDrawBatch batch, float W, float H)
     {
         const int Steps = 17;
-        float rowH = H * 0.07f;
+        int rows = 1 + ToneBands.GammaCandidates.Length;
+        float rowH = H * 0.05f;
         float cellW = W / Steps;
         var quad = new QuadraticBezier2[4];
 
@@ -687,16 +692,24 @@ internal static class VectorLcd
 
         // Black backing so each patch composites over a known floor, exactly
         // like the ship does over the empty panel.
-        Rect(0f, 0f, W, rowH * 2f, new ColorSRGB((byte)0, (byte)0, (byte)0, (byte)255));
+        Rect(0f, 0f, W, rowH * rows, new ColorSRGB((byte)0, (byte)0, (byte)0, (byte)255));
 
         byte bb = (byte)BlitBrightness;
         for (int i = 0; i < Steps; i++)
         {
             int v = Math.Min(255, i * 16);
-            int a = (int)Math.Round(255.0 * ToneBands.PanelCurve(v / 255.0));
             float x0 = i * cellW, x1 = x0 + cellW - 1f;
-            Rect(x0, 0f, x1, rowH, new ColorSRGB(bb, bb, bb, (byte)a));
-            Rect(x0, rowH, x1, rowH * 2f, new ColorSRGB((byte)v, (byte)v, (byte)v, (byte)255));
+
+            // Row 0: the panel's raw response.
+            Rect(x0, 0f, x1, rowH, new ColorSRGB((byte)v, (byte)v, (byte)v, (byte)255));
+
+            // Rows 1..n: the same sweep corrected by each candidate gamma.
+            for (int g = 0; g < ToneBands.GammaCandidates.Length; g++)
+            {
+                int a = (int)Math.Round(255.0 * ToneBands.PanelCurve(v / 255.0, ToneBands.GammaCandidates[g]));
+                float y0 = (g + 1) * rowH;
+                Rect(x0, y0, x1, y0 + rowH, new ColorSRGB(bb, bb, bb, (byte)a));
+            }
         }
     }
 
