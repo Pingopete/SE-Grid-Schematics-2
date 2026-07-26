@@ -22,7 +22,12 @@ internal static class VectorLcd
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, bool> _rtResets = new();
     public static readonly System.Collections.Concurrent.ConcurrentDictionary<int, bool> NeedsContentCycle = new();
     public static volatile bool UseImageBlit = true;
-    public static volatile int BlitBrightness = 128; // peak value handed to the panel
+    // Peak value handed to the panel. Full white, because the final panel value
+    // is BlitBrightness * alpha / 255 — at 128 only every other 8-bit level was
+    // reachable, halving the resolution available to the dark end where the
+    // response correction needs it most. Brightness shaping is the correction
+    // curve's job (ToneBands.PanelCurve); this just stops throwing levels away.
+    public static volatile int BlitBrightness = 255;
     // Measurement, not decoration. Nothing in this mod has ever checked that the
     // alpha we hand the panel is the brightness that comes back off the glass —
     // the whole tone pipeline assumes it. This draws two known ramps so the

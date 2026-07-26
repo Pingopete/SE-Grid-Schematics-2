@@ -53,12 +53,12 @@ internal static class ToneBands
     //
     // Gamma 1.0 is no correction. The panel's lift is severe, so this needs to
     // be well above the 2.2-ish figure a normal display would want.
-    public static volatile float PanelGamma = 3.0f;
+    public static volatile float PanelGamma = 3.5f;
 
     // Candidates drawn side by side by VectorLcd's test ramp. The correct one
     // is whichever row reads as an EVEN sweep from black to white, because an
     // even sweep means tone and perceived brightness finally agree.
-    public static readonly float[] GammaCandidates = { 2.5f, 3.0f, 3.5f, 4.0f };
+    public static readonly float[] GammaCandidates = { 3.0f, 3.5f, 4.0f, 4.5f };
 
     // The faintest material still has to register. A steep correction drives
     // the thinnest columns below a single alpha step, which would drop them
@@ -67,10 +67,26 @@ internal static class ToneBands
     // rest of the range nothing.
     private const double MinAlpha = 4.0 / 255.0;
 
+    // Below this tone the curve goes LINEAR. A power curve steep enough to
+    // undo the panel's lift squeezes the bottom half of the tone range into a
+    // few percent of the alpha range, where 8-bit alpha cannot hold the steps
+    // apart: the dark shades collapse into each other and the render drops
+    // from mid grey straight to black with nothing in between. sRGB carries a
+    // linear toe for precisely this reason.
+    //
+    // The toe runs from the visibility floor at tone 0 to the power curve's
+    // own value at the knee, so the two meet without a step.
+    private const double Knee = 0.5;
+
     public static double PanelCurve(double tone01) => PanelCurve(tone01, PanelGamma);
 
     public static double PanelCurve(double tone01, double gamma)
-        => MinAlpha + (1.0 - MinAlpha) * Math.Pow(Math.Clamp(tone01, 0.0, 1.0), gamma);
+    {
+        double t = Math.Clamp(tone01, 0.0, 1.0);
+        double kneeA = MinAlpha + (1.0 - MinAlpha) * Math.Pow(Knee, gamma);
+        if (t < Knee) return MinAlpha + (kneeA - MinAlpha) * (t / Knee);
+        return MinAlpha + (1.0 - MinAlpha) * Math.Pow(t, gamma);
+    }
 
     public struct Loop
     {
