@@ -389,7 +389,7 @@ internal static class VectorLcd
                         {
                             bool current = i == Calibration.Step % 3;
                             var c = !current
-                                ? Premul(110, 115, 120, 160)
+                                ? new ColorSRGB((byte)110, (byte)115, (byte)120, (byte)160)
                                 : phase2
                                     ? new ColorSRGB((byte)255, (byte)170, (byte)60, (byte)255)  // pass 2: orange = new standpoint
                                     : new ColorSRGB((byte)90, (byte)190, (byte)255, (byte)255); // pass 1: blue
@@ -658,28 +658,15 @@ internal static class VectorLcd
     // rule at every zoom, never more vertices than the screen can resolve.
     // Loops are culled by bounding box; each band is a single DrawFill whose
     // winding punches its holes.
-    // The panel's fill takes PREMULTIPLIED colour: it composites
-    // src.rgb + dst*(1 - src.a), so the colour channels must already carry the
-    // alpha. Handing it a straight colour makes every band paint its full
-    // brightness no matter how faint its alpha, which is why a 64-band stack
-    // meant to run from near-black to white came back as one flat light grey.
-    //
-    // Premultiplying restores the stack the tone maps were solved for: with
-    // src.rgb = C*a, the composite is C*a + dst*(1-a) — ordinary source-over,
-    // so a band's alpha once again decides how much of it you see.
-    public static ColorSRGB Premul(int r, int g, int b, int a)
-        => new ColorSRGB((byte)(r * a / 255), (byte)(g * a / 255), (byte)(b * a / 255), (byte)a);
-
     // Two 17-step ramps, left (0) to right (255), read straight off a screenshot.
     //
-    //   TOP row    — stepping alpha, PREMULTIPLIED. Exactly what the band stack
-    //                now does, so this is the curve the ship is drawn on.
-    //   BOTTOM row — stepping GREY at full alpha. The panel's colour response
-    //                with compositing taken out of the picture.
-    //
-    // The two rows should now agree step for step. They did not before: the top
-    // row was one flat shade across its whole length, because un-premultiplied
-    // colour ignores alpha entirely when the destination is black.
+    //   TOP row    — stepping alpha through the SAME response correction the
+    //                bands use, so this is the curve the ship is drawn on. It
+    //                should read as an even black-to-white sweep.
+    //   BOTTOM row — stepping GREY at full alpha: the panel's raw response,
+    //                uncorrected. It is not even, and that is the point — its
+    //                dark end lifts off black almost immediately and its top
+    //                half is one indistinguishable white.
     private static void DrawToneRamp(IDrawBatch batch, float W, float H)
     {
         const int Steps = 17;
@@ -702,11 +689,13 @@ internal static class VectorLcd
         // like the ship does over the empty panel.
         Rect(0f, 0f, W, rowH * 2f, new ColorSRGB((byte)0, (byte)0, (byte)0, (byte)255));
 
+        byte bb = (byte)BlitBrightness;
         for (int i = 0; i < Steps; i++)
         {
             int v = Math.Min(255, i * 16);
+            int a = (int)Math.Round(255.0 * ToneBands.PanelCurve(v / 255.0));
             float x0 = i * cellW, x1 = x0 + cellW - 1f;
-            Rect(x0, 0f, x1, rowH, Premul(255, 255, 255, v));
+            Rect(x0, 0f, x1, rowH, new ColorSRGB(bb, bb, bb, (byte)a));
             Rect(x0, rowH, x1, rowH * 2f, new ColorSRGB((byte)v, (byte)v, (byte)v, (byte)255));
         }
     }
@@ -795,8 +784,8 @@ internal static class VectorLcd
                 // A tinted set is an overlay: keep its own colour and paint it
                 // solid so highlighted systems read clearly over the hull.
                 var col = tint.HasValue
-                    ? Premul(tint.Value.R, tint.Value.G, tint.Value.B, 235)
-                    : Premul(bb, bb, bb, band.Alpha);
+                    ? new ColorSRGB(tint.Value.R, tint.Value.G, tint.Value.B, (byte)235)
+                    : new ColorSRGB(bb, bb, bb, band.Alpha);
                 batch.DrawFill(new ReadOnlySpan<QuadraticBezier2>(_splineBuf, 0, n), col, null, false);
             }
             batch.ScissorPop();

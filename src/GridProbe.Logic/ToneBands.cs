@@ -36,6 +36,29 @@ internal static class ToneBands
     // simplification is invisible by construction at every zoom.
     public static readonly float[] LodTol = { 0f, 0.05f, 0.15f, 0.5f };
 
+    // Panel response correction — the one place tone becomes alpha.
+    //
+    // The LCD is an emissive surface going through the game's HDR path, and it
+    // does not show back what you write. Measured with VectorLcd's test ramp:
+    // an input of 16/255 already comes back a mid grey, and everything past
+    // roughly 100/255 is one indistinguishable white. Writing tone straight
+    // through therefore lands almost the entire ship in the saturated top of
+    // that curve, which is why every render came back flat and pale however
+    // well the tone field itself was fitted.
+    //
+    // Raising tone to a power before it becomes alpha spends our range where
+    // the panel can still resolve it. This is a display calibration, not a
+    // tone-mapping choice: it belongs here, at the boundary, and not smeared
+    // through the tone maps where it would corrupt what the modes mean.
+    //
+    // Gamma 1.0 is no correction. The panel's own curve is steeper than 2,
+    // but correcting for all of it crushes the hull into flat black — the
+    // useful setting sits between.
+    public static volatile float PanelGamma = 1.5f;
+
+    public static double PanelCurve(double tone01)
+        => Math.Pow(Math.Clamp(tone01, 0.0, 1.0), PanelGamma);
+
     public struct Loop
     {
         public float[][] L;                   // L[tier]; empty array = dropped here
@@ -70,7 +93,7 @@ internal static class ToneBands
                 if (tones[x, y] > 0 && tones[x, y] < tMin) tMin = tones[x, y];
         if (tMin == 255) tMin = 120;
         double cum = 0;
-        AddBand(set, cov, BlockShapes.FracUnits / 2f, Math.Min(1.0, tMin * 2.0 / 255.0), ref cum);
+        AddBand(set, cov, BlockShapes.FracUnits / 2f, PanelCurve(tMin * 2.0 / 255.0), ref cum);
         return set;
     }
 
@@ -100,15 +123,15 @@ internal static class ToneBands
         // Base band: the exact coverage silhouette at the tone floor.
         double cum = 0;
         if (cov != null)
-            AddBand(set, cov, BlockShapes.FracUnits / 2f, tMin / 255.0, ref cum);
+            AddBand(set, cov, BlockShapes.FracUnits / 2f, PanelCurve(tMin / 255.0), ref cum);
         else
-            AddBand(set, f, Math.Max(1f, tMin * 0.5f), tMin / 255.0, ref cum);
+            AddBand(set, f, Math.Max(1f, tMin * 0.5f), PanelCurve(tMin / 255.0), ref cum);
 
         for (int k = 1; k < Levels; k++)
         {
             float iso = tMin + k * (fMax - tMin) / (float)(Levels - 1);
             if (iso <= tMin + 0.5f || iso > fMax) continue;
-            AddBand(set, f, iso, iso / 255.0, ref cum);
+            AddBand(set, f, iso, PanelCurve(iso / 255.0), ref cum);
         }
         return set;
     }

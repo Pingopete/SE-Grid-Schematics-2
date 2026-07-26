@@ -132,8 +132,10 @@ internal static class RenderReal
         for (int x = 0; x < w; x++)
             for (int y = 0; y < h; y++)
             {
-                int want = tone[x, y];
-                if (want == 0) continue;
+                if (tone[x, y] == 0) continue;
+                // The stack targets the panel-corrected tone, so that is what
+                // it must be checked against.
+                int want = (int)Math.Round(255.0 * ToneBands.PanelCurve(tone[x, y] / 255.0));
                 int got = (int)Math.Round(acc[x, y] * 255.0);
                 double e = Math.Abs(got - want);
                 sum += e; if (e > maxErr) maxErr = e; n++;
