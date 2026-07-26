@@ -39,11 +39,10 @@ internal static class VectorLcd
     // best: everything else there is unchanged, so if the top now bridges to
     // white without the rest washing out, 128 is right.
     public static volatile int BlitBrightness = 128;
-    // Measurement, not decoration. Nothing in this mod has ever checked that the
-    // alpha we hand the panel is the brightness that comes back off the glass —
-    // the whole tone pipeline assumes it. This draws two known ramps so the
-    // panel's real response can be read straight off a screenshot.
-    public static volatile bool ToneRamp = true;
+    // Measurement, not decoration: draws known ramps so the panel's real
+    // response can be read straight off a screenshot. Off by default — flip it
+    // on when the tone pipeline needs recalibrating against the glass.
+    public static volatile bool ToneRamp = false;
     private const int SuperSample = 2; // image rendered at Nx panel pixels; GPU downsamples on the glass
     private const long ImgVersion = 7; // bump when the resampler changes to bust the image cache
     public static volatile bool ShowCursor = true;

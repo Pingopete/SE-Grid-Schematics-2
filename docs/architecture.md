@@ -165,6 +165,47 @@ Note that the **band count is the output bit depth** — within a band the alpha
 constant, so it caps how many greys the panel can show however smooth the field
 is. Cost scales linearly with it.
 
+#### Panel response correction
+
+The LCD does not show back what you write. It is an emissive surface running
+through the game's HDR path, and its response is heavily lifted: a linear alpha
+ramp reaches white within a couple of steps out of seventeen. Tone written
+straight through therefore lands almost the whole ship in the flat top of that
+curve, which is why renders came back pale and washed however well the tone
+field itself was fitted.
+
+`ToneBands.PanelCurve` corrects for it at the single point where tone becomes
+alpha. This is a **display calibration and it belongs at the boundary**, not in
+the tone maps — folding it into them would change what the three modes mean.
+
+- `PanelGamma` (2.8) — the correction itself.
+- `Knee` (0.2) — below this the curve goes linear. A power curve steep enough to
+  undo the lift squeezes the bottom of the range into a few percent of the alpha
+  range, where 8-bit alpha cannot hold the steps apart and the dark shades
+  collapse into each other. sRGB carries a linear toe for the same reason.
+- `MinAlpha` (1/255) — floor so the thinnest column cannot vanish entirely and
+  take the silhouette's edge with it. One step, not more: at 4/255 the darkest
+  tone composited above the panel's black threshold and the render could never
+  reach black at all.
+- `VectorLcd.BlitBrightness` (128) — the panel's white point, i.e. the top of the
+  range it can still distinguish. Alpha's 255 steps are spread across it. Too
+  high and they pile up past saturation looking identical; too low and the top
+  never reaches white. **It must move together with `PanelGamma`**: it sets where
+  the top lands, and raising it multiplies every tone below it by the same
+  factor, so gamma is what holds the mids down.
+
+`VectorLcd.DrawToneRamp` is the instrument, off by default. It draws a linear
+alpha control row, the raw colour response, and fine sweeps of the toe and
+shoulder. Two cautions learned the hard way:
+
+- **Measure through alpha, not colour.** Rows that vary colour at full alpha
+  measure the panel but not the path the ship is drawn through. Correcting from
+  those alone means correcting a curve you never measured.
+- **The panel blooms.** A solid-white row adjacent to the row being read bleeds
+  into it and lifts its dark end. Two patches that composite to the same value
+  then read differently, which invalidates everything inferred from them. Rows
+  are separated by black gaps and the white shoulder row is kept last.
+
 ### 3. Band geometry (background thread, ~50–200 ms, cached)
 
 `ToneBands` converts the tone field into ~39 nested iso-contour polygons — like
