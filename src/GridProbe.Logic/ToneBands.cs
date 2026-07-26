@@ -68,15 +68,16 @@ internal static class ToneBands
     // even sweep means tone and perceived brightness finally agree.
     public static readonly float[] GammaCandidates = { 1.8f, 2.2f, 2.6f, 3.0f };
 
-    // The faintest material still has to register. A steep correction drives
-    // the thinnest columns below a single alpha step, which would drop them
-    // out of the panel and take the silhouette's edge with them.
+    // Floor on the faintest material, so a thin column cannot vanish entirely
+    // and take the silhouette's edge with it.
     //
-    // I raised this to 22/255 on a reading that the panel has a dead zone below
-    // input 10. That reading was wrong — it washed the render out — so it is
-    // back at the value the render read best at. The ramp rows I based it on
-    // disagree with each other, and until that is resolved this stays put.
-    private const double MinAlpha = 4.0 / 255.0;
+    // One step, not four. At 4/255 the darkest tone composited to 2 against
+    // BlitBrightness 128, and the toe row shows the panel still rendering
+    // something there — so the corrected sweep could never reach black, it
+    // bottomed out at the dimmest grey the panel shows. At 1/255 it composites
+    // to well under one level and lands on black, which is what lets the dark
+    // end actually arrive somewhere rather than stopping short.
+    private const double MinAlpha = 1.0 / 255.0;
 
     // Below this tone the curve goes LINEAR. A power curve steep enough to
     // undo the panel's lift squeezes the bottom half of the tone range into a
