@@ -93,6 +93,111 @@ internal static class RenderReal
         return 0;
     }
 
+    // Ground truth for the band stack: composite the bands exactly as the GPU
+    // does — source-over, in draw order, over a black panel — and compare the
+    // result against the tone field they were built from. Any drift between
+    // "what the tone map asked for" and "what the stack actually paints" shows
+    // up here, with no game running and nothing to eyeball.
+    //   verify <tonefield.bmp>
+    public static int Verify(string[] args)
+    {
+        var (img, w, h) = ReadGray8(args[1]);
+        var tone = new byte[w, h];
+        var cov = new byte[w, h];
+        for (int x = 0; x < w; x++)
+            for (int y = 0; y < h; y++)
+            {
+                byte v = img[y * w + x];
+                tone[x, y] = v;
+                if (v > 0) cov[x, y] = BlockShapes.FracUnits;
+            }
+
+        var set = ToneBands.Build(tone, cov);
+        Console.WriteLine($"{Path.GetFileName(args[1])}: {w}x{h}, {set.Bands.Count} bands");
+
+        // Composite: A' = A + a(1-A), per pixel, bands in order.
+        var acc = new double[w, h];
+        foreach (var band in set.Bands)
+        {
+            double a = band.Alpha / 255.0;
+            var inside = Rasterize(band, w, h);
+            for (int x = 0; x < w; x++)
+                for (int y = 0; y < h; y++)
+                    if (inside[x, y]) acc[x, y] = acc[x, y] + a * (1.0 - acc[x, y]);
+        }
+
+        // Compare where the field says there is material.
+        double sum = 0, maxErr = 0; int n = 0, gotMin = 255, wantMin = 255, gotMax = 0, wantMax = 0;
+        var errHist = new int[64];
+        for (int x = 0; x < w; x++)
+            for (int y = 0; y < h; y++)
+            {
+                int want = tone[x, y];
+                if (want == 0) continue;
+                int got = (int)Math.Round(acc[x, y] * 255.0);
+                double e = Math.Abs(got - want);
+                sum += e; if (e > maxErr) maxErr = e; n++;
+                errHist[Math.Min(63, (int)(e / 4))]++;
+                if (want < wantMin) wantMin = want;
+                if (want > wantMax) wantMax = want;
+                if (got < gotMin) gotMin = got;
+                if (got > gotMax) gotMax = got;
+            }
+        Console.WriteLine($"  tone field  : [{wantMin}..{wantMax}]");
+        Console.WriteLine($"  stack paints: [{gotMin}..{gotMax}]");
+        Console.WriteLine($"  error: mean {sum / Math.Max(1, n):F1}, max {maxErr:F0}, over {n} px");
+
+        // Where does the darkest material actually land?
+        int dark = 0, darkPainted = 0;
+        for (int x = 0; x < w; x++)
+            for (int y = 0; y < h; y++)
+            {
+                if (tone[x, y] == 0 || tone[x, y] > wantMin + 8) continue;
+                dark++; darkPainted += (int)Math.Round(acc[x, y] * 255.0);
+            }
+        if (dark > 0)
+            Console.WriteLine($"  darkest {dark} px: field says ~{wantMin}, stack paints avg {darkPainted / (double)dark:F1}");
+        return 0;
+    }
+
+    // Nonzero-winding scanline fill of one band's loops at full detail.
+    private static bool[,] Rasterize(ToneBands.Band band, int w, int h)
+    {
+        var inside = new bool[w, h];
+        var xs = new List<(float X, int Dir)>();
+        for (int py = 0; py < h; py++)
+        {
+            float fy = py + 0.5f;
+            xs.Clear();
+            foreach (var loop in band.Loops)
+            {
+                var pts = loop.L[0];
+                int m = pts.Length / 2;
+                for (int i = 0; i < m; i++)
+                {
+                    int j = (i + 1) % m;
+                    float ay = pts[i * 2 + 1], by = pts[j * 2 + 1];
+                    if (ay == by) continue;
+                    if (fy < Math.Min(ay, by) || fy >= Math.Max(ay, by)) continue;
+                    float ax = pts[i * 2], bx = pts[j * 2];
+                    xs.Add((ax + (bx - ax) * (fy - ay) / (by - ay), by > ay ? 1 : -1));
+                }
+            }
+            if (xs.Count == 0) continue;
+            xs.Sort((p, q) => p.X.CompareTo(q.X));
+            int wind = 0;
+            for (int i = 0; i < xs.Count - 1; i++)
+            {
+                wind += xs[i].Dir;
+                if (wind == 0) continue;
+                int x0 = Math.Max(0, (int)Math.Ceiling(xs[i].X - 0.5f));
+                int x1 = Math.Min(w - 1, (int)Math.Floor(xs[i + 1].X - 0.5f));
+                for (int x = x0; x <= x1; x++) inside[x, py] = true;
+            }
+        }
+        return inside;
+    }
+
     private static (byte[] Data, int W, int H) ReadGray8(string path)
     {
         var bytes = File.ReadAllBytes(path);

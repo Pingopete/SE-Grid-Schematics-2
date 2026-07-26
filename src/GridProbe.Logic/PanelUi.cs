@@ -65,8 +65,9 @@ internal static class PanelUi
 
     public static void Draw(IDrawBatch batch, float W, float H, PanelState st, Button hover)
     {
-        var bg = new ColorSRGB((byte)16, (byte)22, (byte)28, (byte)185);
-        var bgHover = new ColorSRGB((byte)45, (byte)60, (byte)75, (byte)220);
+        // Translucent fills must be premultiplied — see VectorLcd.Premul.
+        var bg = VectorLcd.Premul(16, 22, 28, 185);
+        var bgHover = VectorLcd.Premul(45, 60, 75, 220);
         var icon = new ColorSRGB((byte)215, (byte)225, (byte)235, (byte)255);
         var accent = new ColorSRGB((byte)90, (byte)190, (byte)255, (byte)255);
 
