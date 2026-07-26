@@ -6,8 +6,13 @@ internal sealed class PanelState
     public const int ViewTop = 0, ViewFront = 1, ViewSide = 2;
     public const int ModeThickness = 0, ModeComplexity = 1, ModeVoids = 2;
 
+    // System highlight overlay. Mutually exclusive: selecting one clears any
+    // other, and selecting the active one clears it.
+    public const int HighlightNone = 0, HighlightConveyor = 1, HighlightPower = 2, HighlightGas = 3;
+
     public volatile int ViewAxis = ViewTop;
     public volatile int Mode = ModeThickness;
+    public volatile int Highlight = HighlightNone;
     public float Zoom = 1f;                 // 1 = fit
     public float PanX = -1f, PanY = -1f;    // window center in cell coords; <0 = image center
     public int Version;                     // bump on any change -> busts the image cache
@@ -17,6 +22,13 @@ internal sealed class PanelState
 
     public static string ViewName(int v) => v switch { ViewTop => "top", ViewFront => "front", ViewSide => "side", _ => "?" };
     public static string ModeName(int m) => m switch { ModeThickness => "thickness", ModeComplexity => "complexity", ModeVoids => "voids", _ => "?" };
+    public static string HighlightName(int h) => h switch
+    {
+        HighlightConveyor => "conveyor",
+        HighlightPower => "power",
+        HighlightGas => "gas",
+        _ => "none",
+    };
 
     // Depth axis collapsed by each UI view (grid is Y-up): top view collapses Y, front collapses Z, side collapses X.
     public static int DepthAxisOf(int viewAxis) => viewAxis switch { ViewTop => 1, ViewFront => 2, _ => 0 };

@@ -29,6 +29,112 @@ internal sealed class OccupancyScan
     // analysis never counts a block twice.
     public List<BoundingBoxI> UnshapedBoxes;
 
+    // Blocks belonging to each highlightable system, kept split by whether an
+    // analytic solid was recovered so the overlay draws at the same detail as
+    // the ship itself. Indexed by PanelState.Highlight* (1..3).
+    public List<(BoundingBoxI Aabb, BlockShapes.Stamp Stamp)>[] CatShaped = new List<(BoundingBoxI, BlockShapes.Stamp)>[4];
+    public List<BoundingBoxI>[] CatBoxes = new List<BoundingBoxI>[4];
+    public int[] CatCount = new int[4];
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(int ViewAxis, int Cat), ToneBands.BandSet> _highlightCache = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(int, int), bool> _highlightBuilding = new();
+
+    public ToneBands.BandSet GetHighlight(int viewAxis, int cat)
+        => _highlightCache.TryGetValue((viewAxis, cat), out var b) ? b : null;
+
+    // Render-thread-safe: kicks one background build, repaints when ready.
+    public void RequestHighlight(int viewAxis, int cat, int panelKey)
+    {
+        if (cat <= 0 || cat >= 4) return;
+        if (_highlightCache.ContainsKey((viewAxis, cat))) return;
+        if (!_highlightBuilding.TryAdd((viewAxis, cat), true)) return;
+        System.Threading.ThreadPool.QueueUserWorkItem(state =>
+        {
+            try
+            {
+                var cov = BuildCategoryCoverage(viewAxis, cat);
+                ToneBands.BandSet set;
+                if (cov == null) set = new ToneBands.BandSet();
+                else
+                {
+                    // Uniform tone: what matters is the exact silhouette of the
+                    // system's blocks, drawn at the same sub-cell fidelity the
+                    // hull uses.
+                    int w = cov.GetLength(0), h = cov.GetLength(1);
+                    var tone = new byte[w, h];
+                    for (int x = 0; x < w; x++)
+                        for (int y = 0; y < h; y++)
+                            if (cov[x, y] > 0) tone[x, y] = 255;
+                    set = ToneBands.Build(tone, cov);
+                }
+                _highlightCache[(viewAxis, cat)] = set;
+                VectorLcd.RepaintRequest[panelKey] = true;
+                ProbeLog.Line($"Highlight bands view {viewAxis} cat {PanelState.HighlightName(cat)}: {set.Bands.Count} bands, {CatCount[cat]} blocks.");
+            }
+            catch (Exception e) { ProbeLog.Error("highlight build", e); }
+            finally { _highlightBuilding.TryRemove((viewAxis, cat), out _); }
+        });
+    }
+
+    // Projected coverage for one system's blocks, using the same union of
+    // sub-cell masks as the main scan so the overlay lines up exactly.
+    private byte[,] BuildCategoryCoverage(int viewAxis, int cat)
+    {
+        var shaped = CatShaped[cat];
+        var boxes = CatBoxes[cat];
+        if ((shaped == null || shaped.Count == 0) && (boxes == null || boxes.Count == 0)) return null;
+
+        int depthAxis = PanelState.DepthAxisOf(viewAxis);
+        (int ua, int va) = depthAxis switch { 1 => (0, 2), 2 => (0, 1), _ => (1, 2) };
+        int uw = Axis(Size, ua), vh = Axis(Size, va);
+        var mask = new ushort[uw, vh];
+        const ushort FullMask = 0xFFFF;
+
+        if (shaped != null)
+            foreach (var (aabb, stamp) in shaped)
+            {
+                var lo = aabb.Min - Min;
+                var ext = aabb.Max - aabb.Min + new Vector3I(1, 1, 1);
+                for (int cx = 0; cx < ext.X; cx++)
+                    for (int cy = 0; cy < ext.Y; cy++)
+                        for (int cz = 0; cz < ext.Z; cz++)
+                        {
+                            if (stamp.Fill[cx, cy, cz] == 0) continue;
+                            var cell = new Vector3I(lo.X + cx, lo.Y + cy, lo.Z + cz);
+                            int u = Axis(cell, ua), v = Axis(cell, va);
+                            if (u < 0 || v < 0 || u >= uw || v >= vh) continue;
+                            mask[u, v] |= depthAxis switch
+                            {
+                                1 => stamp.MaskXZ[cx, cy, cz],
+                                2 => stamp.MaskXY[cx, cy, cz],
+                                _ => stamp.MaskYZ[cx, cy, cz],
+                            };
+                        }
+            }
+
+        if (boxes != null)
+            foreach (var b in boxes)
+            {
+                var lo = b.Min - Min;
+                var hi = b.Max - Min;
+                int u0 = Math.Max(0, Axis(lo, ua)), u1 = Math.Min(uw - 1, Axis(hi, ua));
+                int v0 = Math.Max(0, Axis(lo, va)), v1 = Math.Min(vh - 1, Axis(hi, va));
+                for (int u = u0; u <= u1; u++)
+                    for (int v = v0; v <= v1; v++)
+                        mask[u, v] = FullMask;
+            }
+
+        var cov = new byte[uw, vh];
+        for (int u = 0; u < uw; u++)
+            for (int v = 0; v < vh; v++)
+                cov[u, v] = (byte)System.Numerics.BitOperations.PopCount(mask[u, v]);
+
+        // Match the orientation the panel draws the ship in.
+        if (depthAxis == 0) return Rot90CCW(cov);
+        if (depthAxis == 2) return Rot180(cov);
+        return cov;
+    }
+
     // Lazily computed per-column channels for one depth axis at a time.
     public volatile int ChannelAxis = -1;
     public float[,] ChFilled, ChLayers, ChVoids;
@@ -290,7 +396,9 @@ internal sealed class OccupancyScan
         var sw = Stopwatch.StartNew();
         var boxes = new List<BoundingBoxI>(4096);          // all blocks (channels/analysis)
         var fullBoxes = new List<BoundingBoxI>(4096);      // solid blocks (thickness sums)
-        var shaped = new List<(object Def, IntegerOrientation Orient, BoundingBoxI Aabb, List<BoundingBoxI> Own)>();
+        var shaped = new List<(object Def, IntegerOrientation Orient, BoundingBoxI Aabb, List<BoundingBoxI> Own, int Cat)>();
+        var catBoxes = new List<BoundingBoxI>[4];
+        var catCount = new int[4];
         int blocks = 0;
         var census = _censusDone ? null : new SortedDictionary<string, int>();
         try
@@ -309,6 +417,9 @@ internal sealed class OccupancyScan
                     var e = box.Max - box.Min + new Vector3I(1, 1, 1);
                     vol += (long)e.X * e.Y * e.Z;
                 }
+                int cat = 0;
+                try { cat = BlockSystems.Classify(b); } catch { }
+
                 bool partial = false;
                 try
                 {
@@ -316,10 +427,18 @@ internal sealed class OccupancyScan
                     var ae = ab.Max - ab.Min + new Vector3I(1, 1, 1);
                     long total = (long)ae.X * ae.Y * ae.Z;
                     partial = vol < total && total >= 8 && total <= 64000;
-                    if (partial) shaped.Add((b.Definition, b.BlockOrientation, ab, own));
+                    if (partial) shaped.Add((b.Definition, b.BlockOrientation, ab, own, cat));
                 }
                 catch { partial = false; }
-                if (!partial) fullBoxes.AddRange(own);
+                if (!partial)
+                {
+                    fullBoxes.AddRange(own);
+                    if (cat > 0)
+                    {
+                        (catBoxes[cat] ??= new List<BoundingBoxI>()).AddRange(own);
+                        catCount[cat]++;
+                    }
+                }
                 if (census != null)
                 {
                     string name = "?";
@@ -380,6 +499,8 @@ internal sealed class OccupancyScan
             Boxes = boxes,
             Shaped = new List<(BoundingBoxI, BlockShapes.Stamp)>(shaped.Count),
             UnshapedBoxes = new List<BoundingBoxI>(fullBoxes),
+            CatBoxes = catBoxes,
+            CatCount = catCount,
         };
 
         // Depth sums accumulate in 1/16-cell units so shaped blocks can
@@ -436,6 +557,11 @@ internal sealed class OccupancyScan
                 // set coverage exactly like any other solid box. Omitting the
                 // coverage write here made every such block invisible, because
                 // the display field is tone * coverage.
+                if (s.Cat > 0)
+                {
+                    (scan.CatBoxes[s.Cat] ??= new List<BoundingBoxI>()).AddRange(s.Own);
+                    scan.CatCount[s.Cat]++;
+                }
                 foreach (var ob in s.Own)
                 {
                     scan.UnshapedBoxes.Add(ob);
@@ -456,6 +582,11 @@ internal sealed class OccupancyScan
 
             stamped++;
             scan.Shaped.Add((aabb, stamp));
+            if (s.Cat > 0)
+            {
+                (scan.CatShaped[s.Cat] ??= new List<(BoundingBoxI, BlockShapes.Stamp)>()).Add((aabb, stamp));
+                scan.CatCount[s.Cat]++;
+            }
             var blo = aabb.Min - min;
             for (int cx = 0; cx < ext.X; cx++)
                 for (int cy = 0; cy < ext.Y; cy++)

@@ -7,26 +7,53 @@ namespace GridProbe;
 // Layout is shared by the renderer (draw) and the aim system (click hit-test).
 internal static class PanelUi
 {
-    public enum Button { None, ZoomIn, ZoomOut, ViewTop, ViewSide, ViewFront, Mode, Calibrate, Refresh }
+    // Shared with the render overlay so the button and the highlighted blocks
+    // are unmistakably the same colour.
+    public static readonly ColorSRGB Lime = new((byte)140, (byte)255, (byte)40, (byte)255);
+
+    public enum Button
+    {
+        None, ZoomIn, ZoomOut, ViewTop, ViewSide, ViewFront, Mode, Calibrate, Refresh,
+        Conveyor, Power, Gas,
+    }
 
     public struct Rect { public Button Id; public float X0, Y0, X1, Y1; }
 
     public static Rect[] Layout(float W, float H)
     {
-        const float size = 56f, gap = 10f, right = 14f;
-        float x0 = W - right - size, x1 = W - right;
+        const float size = 56f, gap = 10f, edge = 14f;
+        var rects = new List<Rect>(12);
+
+        // Right column: view and display controls.
+        float rx0 = W - edge - size, rx1 = W - edge;
         float y = 44f;
-        var order = new[] { Button.ZoomIn, Button.ZoomOut, Button.ViewTop, Button.ViewSide, Button.ViewFront, Button.Mode, Button.Calibrate, Button.Refresh };
-        var rects = new Rect[order.Length];
-        for (int i = 0; i < order.Length; i++)
+        var right = new[] { Button.ZoomIn, Button.ZoomOut, Button.ViewTop, Button.ViewSide, Button.ViewFront, Button.Mode, Button.Calibrate, Button.Refresh };
+        foreach (var id in right)
         {
-            float extra = (order[i] == Button.ViewTop || order[i] == Button.Mode || order[i] == Button.Calibrate) ? 18f : 0f; // group separators
-            y += extra;
-            rects[i] = new Rect { Id = order[i], X0 = x0, Y0 = y, X1 = x1, Y1 = y + size };
+            if (id == Button.ViewTop || id == Button.Mode || id == Button.Calibrate) y += 18f; // group separators
+            rects.Add(new Rect { Id = id, X0 = rx0, Y0 = y, X1 = rx1, Y1 = y + size });
             y += size + gap;
         }
-        return rects;
+
+        // Left column: system highlight overlays.
+        float lx0 = edge, lx1 = edge + size;
+        y = 44f;
+        foreach (var id in new[] { Button.Conveyor, Button.Power, Button.Gas })
+        {
+            rects.Add(new Rect { Id = id, X0 = lx0, Y0 = y, X1 = lx1, Y1 = y + size });
+            y += size + gap;
+        }
+        return rects.ToArray();
     }
+
+    // Which highlight a button selects, or HighlightNone if it isn't one.
+    public static int HighlightOf(Button b) => b switch
+    {
+        Button.Conveyor => PanelState.HighlightConveyor,
+        Button.Power => PanelState.HighlightPower,
+        Button.Gas => PanelState.HighlightGas,
+        _ => PanelState.HighlightNone,
+    };
 
     public static Button HitTest(float W, float H, float px, float py)
     {
@@ -45,16 +72,36 @@ internal static class PanelUi
 
         foreach (var r in Layout(W, H))
         {
-            bool active = (r.Id == Button.ViewTop && st.ViewAxis == PanelState.ViewTop)
+            int hl = HighlightOf(r.Id);
+            bool highlightOn = hl != PanelState.HighlightNone && st.Highlight == hl;
+            bool active = highlightOn
+                       || (r.Id == Button.ViewTop && st.ViewAxis == PanelState.ViewTop)
                        || (r.Id == Button.ViewSide && st.ViewAxis == PanelState.ViewSide)
                        || (r.Id == Button.ViewFront && st.ViewAxis == PanelState.ViewFront);
             Fill(batch, r.X0, r.Y0, r.X1, r.Y1, r.Id == hover ? bgHover : bg);
-            if (active) Border(batch, r.X0, r.Y0, r.X1, r.Y1, 3f, accent);
+            // Selected overlays outline in the same lime they paint the ship in.
+            if (active) Border(batch, r.X0, r.Y0, r.X1, r.Y1, 3f, highlightOn ? Lime : accent);
 
             float cx = (r.X0 + r.X1) / 2f, cy = (r.Y0 + r.Y1) / 2f;
             float s = (r.X1 - r.X0) * 0.30f;
+            var sysIcon = highlightOn ? Lime : icon;
             switch (r.Id)
             {
+                case Button.Conveyor:  // junction: a line with branches
+                    Fill(batch, cx - s * 1.2f, cy - 3, cx + s * 1.2f, cy + 3, sysIcon);
+                    Fill(batch, cx - 3, cy - s * 1.2f, cx + 3, cy + 3, sysIcon);
+                    Fill(batch, cx - s * 1.25f, cy - s * 0.5f, cx - s * 0.75f, cy + s * 0.5f, sysIcon);
+                    Fill(batch, cx + s * 0.75f, cy - s * 0.5f, cx + s * 1.25f, cy + s * 0.5f, sysIcon);
+                    break;
+                case Button.Power:     // lightning bolt, two offset wedges
+                    Fill(batch, cx - s * 0.15f, cy - s * 1.2f, cx + s * 0.55f, cy, sysIcon);
+                    Fill(batch, cx - s * 0.55f, cy, cx + s * 0.15f, cy + s * 1.2f, sysIcon);
+                    break;
+                case Button.Gas:       // canister: rounded body with a neck
+                    Fill(batch, cx - s * 0.25f, cy - s * 1.25f, cx + s * 0.25f, cy - s * 0.85f, sysIcon);
+                    Fill(batch, cx - s * 0.75f, cy - s * 0.85f, cx + s * 0.75f, cy + s * 1.15f, sysIcon);
+                    Fill(batch, cx - s * 0.45f, cy - s * 0.45f, cx + s * 0.45f, cy + s * 0.25f, r.Id == hover ? bgHover : bg);
+                    break;
                 case Button.ZoomIn:
                     Fill(batch, cx - s, cy - 3, cx + s, cy + 3, icon);
                     Fill(batch, cx - 3, cy - s, cx + 3, cy + s, icon);

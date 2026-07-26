@@ -252,6 +252,17 @@ internal static class CursorAim
             case PanelUi.Button.ViewSide: st.ViewAxis = PanelState.ViewSide; st.PanX = st.PanY = -1f; break;
             case PanelUi.Button.ViewFront: st.ViewAxis = PanelState.ViewFront; st.PanX = st.PanY = -1f; break;
             case PanelUi.Button.Mode: st.Mode = (st.Mode + 1) % 3; break;
+            case PanelUi.Button.Conveyor:
+            case PanelUi.Button.Power:
+            case PanelUi.Button.Gas:
+            {
+                // One overlay at a time: pressing the active one clears it,
+                // pressing another switches straight to it.
+                int want = PanelUi.HighlightOf(hit);
+                st.Highlight = st.Highlight == want ? PanelState.HighlightNone : want;
+                ProbeLog.Line($"Highlight -> {PanelState.HighlightName(st.Highlight)}");
+                break;
+            }
             case PanelUi.Button.Refresh:
                 VectorLcd.ForceRefresh(key);
                 return;

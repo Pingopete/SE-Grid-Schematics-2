@@ -306,6 +306,15 @@ internal static class VectorLcd
                     DrawBands(batch, bands, win);
                     bandsDrawn = true;
                     drewContent = true;
+
+                    // System overlay on top of the hull, in the same recovered
+                    // geometry so highlighted blocks keep their real shape.
+                    if (st.Highlight != PanelState.HighlightNone)
+                    {
+                        var hl = scan.GetHighlight(st.ViewAxis, st.Highlight);
+                        if (hl == null) scan.RequestHighlight(st.ViewAxis, st.Highlight, shipKey);
+                        else if (hl.Bands.Count > 0) DrawBands(batch, hl, win, PanelUi.Lime);
+                    }
                     // Bands own this panel now: shut the texture pipeline down so
                     // it stops pinning and stops forcing per-frame repaints.
                     if (_imgBase.TryRemove(shipKey, out _))
@@ -643,7 +652,8 @@ internal static class VectorLcd
     // Loops are culled by bounding box; each band is a single DrawFill whose
     // winding punches its holes.
     private static void DrawBands(IDrawBatch batch, ToneBands.BandSet bands,
-        (double Wx0, double Wy0, double WinW, double WinH, float Vx0, float Vy0, float VpW, float VpH) win)
+        (double Wx0, double Wy0, double WinW, double WinH, float Vx0, float Vy0, float VpW, float VpH) win,
+        ColorSRGB? tint = null)
     {
         var swRec = System.Diagnostics.Stopwatch.StartNew();
         lock (_vecLock)
@@ -722,8 +732,12 @@ internal static class VectorLcd
                 if (n == 0) continue;
                 drawn += n;
                 calls++;
-                batch.DrawFill(new ReadOnlySpan<QuadraticBezier2>(_splineBuf, 0, n),
-                    new ColorSRGB(bb, bb, bb, band.Alpha), null, false);
+                // A tinted set is an overlay: keep its own colour and paint it
+                // solid so highlighted systems read clearly over the hull.
+                var col = tint.HasValue
+                    ? new ColorSRGB(tint.Value.R, tint.Value.G, tint.Value.B, (byte)235)
+                    : new ColorSRGB(bb, bb, bb, band.Alpha);
+                batch.DrawFill(new ReadOnlySpan<QuadraticBezier2>(_splineBuf, 0, n), col, null, false);
             }
             batch.ScissorPop();
             _lastBandLod = lod;
