@@ -678,10 +678,17 @@ internal static class VectorLcd
     //
     //   ROW 0 — the corrected tone sweep: what the ship is actually drawn on.
     //           This is the one that should run evenly from black to white.
-    //   ROW 1 — raw response over the full range, 0..255 in steps of 16.
-    //   ROW 2 — raw response over the TOE, 0..16 in steps of 1. Reads off where
+    //   ROW 1 — LINEAR ALPHA, no correction at all: white at alpha 0..255.
+    //           The control. Rows 2-4 vary colour at full alpha, so they only
+    //           ever measured the panel, never the path the ship is drawn
+    //           through. If this row already sweeps evenly black to white then
+    //           alpha behaves linearly, PanelCurve is correcting for something
+    //           that was never wrong, and gamma belongs at 1.0. If it does not,
+    //           its shape IS the correction to apply, read directly.
+    //   ROW 2 — raw response over the full range, 0..255 in steps of 16.
+    //   ROW 3 — raw response over the TOE, 0..16 in steps of 1. Reads off where
     //           the panel stops being black.
-    //   ROW 3 — raw response over the SHOULDER, 128..255 in steps of 8. Reads
+    //   ROW 4 — raw response over the SHOULDER, 128..255 in steps of 8. Reads
     //           off where it reaches white, which is what BlitBrightness has to
     //           equal.
     //
@@ -693,7 +700,7 @@ internal static class VectorLcd
     private static void DrawToneRamp(IDrawBatch batch, float W, float H)
     {
         const int Steps = 17;
-        const int Rows = 4;
+        const int Rows = 5;
         float rowH = H * 0.045f;
         float gapH = rowH * 0.5f;      // black separator: keeps bloom from one row off the next
         float pitch = rowH + gapH;
@@ -725,13 +732,19 @@ internal static class VectorLcd
                 Rect(x0, row * pitch, x1, row * pitch + rowH, new ColorSRGB(c, c, c, (byte)255));
             }
 
+            int v = Math.Min(255, i * 16);
+
             // Row 0: the corrected sweep, drawn exactly the way a band is drawn.
-            int a = (int)Math.Round(255.0 * ToneBands.PanelCurve(Math.Min(255, i * 16) / 255.0));
+            int a = (int)Math.Round(255.0 * ToneBands.PanelCurve(v / 255.0));
             Rect(x0, 0f, x1, rowH, new ColorSRGB(bb, bb, bb, (byte)a));
 
-            Raw(1, i * 16);            // full range
-            Raw(2, i);                 // toe, one level per cell
-            Raw(3, 128 + i * 8);       // shoulder, kept last: solid white blooms
+            // Row 1: the control — linear alpha, white, no correction anywhere.
+            Rect(x0, pitch, x1, pitch + rowH,
+                new ColorSRGB((byte)255, (byte)255, (byte)255, (byte)v));
+
+            Raw(2, v);                 // full range
+            Raw(3, i);                 // toe, one level per cell
+            Raw(4, 128 + i * 8);       // shoulder, kept last: solid white blooms
         }
     }
 
