@@ -53,19 +53,18 @@ internal static class ToneBands
     //
     // Gamma 1.0 is no correction. The panel's lift is severe, so this needs to
     // be well above the 2.2-ish figure a normal display would want.
-    public static volatile float PanelGamma = 2.2f;
+    public static volatile float PanelGamma = 2.6f;
 
     // Candidates drawn side by side by VectorLcd's test ramp. The correct one
     // is whichever row reads as an EVEN sweep from black to white, because an
     // even sweep means tone and perceived brightness finally agree.
     public static readonly float[] GammaCandidates = { 1.8f, 2.2f, 2.6f, 3.0f };
 
-    // The faintest material still has to register. A steep correction drives
-    // the thinnest columns below a single alpha step, which would drop them
-    // into the panel entirely and take the silhouette's edge with them. This
-    // is a floor on visibility, not a brightness lift: at 4/255 it costs the
-    // rest of the range nothing.
-    private const double MinAlpha = 4.0 / 255.0;
+    // The faintest material still has to register, but only just. At 4/255 this
+    // held the darkest tone a clear step off black, so the render never bridged
+    // down to the panel's own black however the curve was shaped. One step is
+    // enough to keep a thin column from vanishing.
+    private const double MinAlpha = 1.0 / 255.0;
 
     // Below this tone the curve goes LINEAR. A power curve steep enough to
     // undo the panel's lift squeezes the bottom half of the tone range into a
@@ -82,7 +81,7 @@ internal static class ToneBands
     // alpha steps — which reads as a jump from the hull's grey straight to
     // black, the very gap it was meant to prevent. It only needs to cover the
     // few percent where a steep curve would otherwise round to nothing.
-    private const double Knee = 0.2;
+    private const double Knee = 0.15;
 
     public static double PanelCurve(double tone01) => PanelCurve(tone01, PanelGamma);
 
