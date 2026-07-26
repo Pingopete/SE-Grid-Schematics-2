@@ -126,12 +126,36 @@ produces spans that slide smoothly from column to column.
   stepping the moment it appears.
 - **Voids** is enclosed empty length between first and last material — continuous
   for the same reason.
-- Ranges come from **percentiles, not min/max**, so one outlier column cannot
-  compress everything else into a narrow band.
 
-Voids also puts structure and void on **one continuous ramp** rather than two
-disjoint bands. The hull was confined to 35–75 while voids got 110–255, putting
-81.6% of occupied pixels inside a 40-level band.
+#### Setting the display range
+
+Every mode ends in the same step, `ToneMaps.Ramp`, which fits the tone range to
+that mode's own measured field. Nothing downstream rescales — `ToneBands` places
+its iso-levels across whatever range arrives and renders each band at its
+absolute tone — so whatever range this step produces *is* what the panel shows.
+
+The ends come from **percentiles, not the outright min and max**. Thickness used
+raw min/max and the endpoints were set by freak columns at both extremes:
+measured on a real ship, the top 0.5% of columns (a few deep shafts) owned 21% of
+the range, so only 1% of the image reached the brightest eighth of the scale and
+none of it reached white. At 1%/99% the ends *are* the true min and max for any
+ship whose extremes are more than a handful of columns wide; anything outside
+them clamps, so nothing is lost — it just is not allowed to set the scale alone.
+
+Voids blends rather than sums. The hull is a dim ghost over `Floor..120`; the
+void reading then carries the column the rest of the way to white, so the
+emptiest column reaches 255 whatever its hull thickness is. Adding two ramps (the
+previous version) required a column to sit at the thickness maximum *and* the
+void maximum at once to reach white, which almost never happens — the mode topped
+out near 240 with its brightest quarter unused. The blend keeps the ramp
+continuous: at zero void it sits exactly on the hull tone.
+
+An earlier version was worse still, confining the hull to 35–75 while voids got
+110–255, which put 81.6% of occupied pixels inside a 40-level band.
+
+A degenerate field (a flat plate, every column identical) reports `hi == lo` and
+lights the whole field at full tone. A fudged epsilon range would instead push it
+all to the dark floor.
 
 Note what is deliberately *not* done here: a blur over the cell grid produces
 gradients too, but they are a smear of coarse data rather than a property of the
