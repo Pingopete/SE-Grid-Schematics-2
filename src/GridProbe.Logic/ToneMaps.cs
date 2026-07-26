@@ -96,6 +96,24 @@ internal static class ToneMaps
         return tones;
     }
 
+    // How much of the ramp follows the field's DISTRIBUTION rather than its
+    // raw values. 0 = pure value ramp, 1 = full histogram equalization.
+    //
+    // Fitting the endpoints is not enough on its own. Measured on a real ship,
+    // 51% of occupied columns land inside a single 32-level band and the middle
+    // half of the ship spans just 34 tone levels out of 219: a hull of roughly
+    // even thickness, which is most of any ship. Stretched between correct
+    // endpoints that still reads as one flat mid grey with the detail inside it
+    // invisible.
+    //
+    // Ranking columns against each other spends tone where the columns actually
+    // are. It stays strictly monotonic — thicker is always brighter — so
+    // nothing is reordered or invented; what changes is that equal tone steps
+    // no longer mean equal thickness steps. That is a real trade, which is why
+    // this is a blend and not a switch: at 0.6 the bulk of the hull gets about
+    // 2.5x the tone range it had while the ramp still tracks thickness.
+    private const double Equalize = 0.6;
+
     // THE range control for every mode. A mode builds a raw continuous field;
     // this decides what black and white mean by fitting the ramp to that
     // field's own distribution, so the panel uses its full contrast whatever
@@ -116,6 +134,7 @@ internal static class ToneMaps
         int w = raw.GetLength(0), h = raw.GetLength(1);
         var (lo, hi) = Percentiles(raw, occ, loP, hiP);
         double span = hi - lo;
+        var rank = BuildRanks(raw, occ, lo, hi);
 
         var tones = new byte[w, h];
         int used = 0, tMin = 255, tMax = 0;
@@ -124,7 +143,8 @@ internal static class ToneMaps
             {
                 if (occ[x, y] <= 0) continue;
                 double n = span > 0 ? Math.Clamp((raw[x, y] - lo) / span, 0.0, 1.0) : 1.0;
-                int t = (int)Math.Round(Floor + Range * Math.Sqrt(n));
+                double v = (1.0 - Equalize) * Math.Sqrt(n) + Equalize * rank[RankBin(n)];
+                int t = (int)Math.Round(Floor + Range * v);
                 tones[x, y] = (byte)Math.Clamp(t, 1, 255);
                 used++;
                 if (t < tMin) tMin = t;
@@ -133,6 +153,41 @@ internal static class ToneMaps
         if (used == 0) { tMin = 0; tMax = 0; }
         ProbeLog.Line($"Tone {tag}: {used} cols, raw [{lo:F2}..{hi:F2}] -> tone [{tMin}..{tMax}].");
         return tones;
+    }
+
+    // Where each value sits in the population, 0..1, as a lookup over the
+    // normalized range. The rank of a bin is the MIDPOINT of the span it
+    // occupies, not its top edge: a large group of identical columns then
+    // centres on its own share of the scale instead of jumping to the top of
+    // it, which is what keeps a flat hull sitting mid-grey rather than white.
+    private const int RankBins = 1024;
+
+    private static int RankBin(double n) => Math.Clamp((int)(n * (RankBins - 1)), 0, RankBins - 1);
+
+    private static double[] BuildRanks(float[,] raw, int[,] occ, double lo, double hi)
+    {
+        double span = hi - lo;
+        var hist = new int[RankBins];
+        int w = raw.GetLength(0), h = raw.GetLength(1);
+        int total = 0;
+        for (int x = 0; x < w; x++)
+            for (int y = 0; y < h; y++)
+            {
+                if (occ[x, y] <= 0) continue;
+                double n = span > 0 ? Math.Clamp((raw[x, y] - lo) / span, 0.0, 1.0) : 1.0;
+                hist[RankBin(n)]++;
+                total++;
+            }
+
+        var rank = new double[RankBins];
+        if (total == 0) return rank;
+        int below = 0;
+        for (int i = 0; i < RankBins; i++)
+        {
+            rank[i] = (below + hist[i] * 0.5) / total;
+            below += hist[i];
+        }
+        return rank;
     }
 
     // Field rescaled to 0..1 by its own percentiles, for use as a term inside
