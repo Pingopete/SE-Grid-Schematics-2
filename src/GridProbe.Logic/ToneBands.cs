@@ -53,7 +53,7 @@ internal static class ToneBands
     //
     // Gamma 1.0 is no correction. The panel's lift is severe, so this needs to
     // be well above the 2.2-ish figure a normal display would want.
-    public static volatile float PanelGamma = 3.5f;
+    public static volatile float PanelGamma = 4.0f;
 
     // Candidates drawn side by side by VectorLcd's test ramp. The correct one
     // is whichever row reads as an EVEN sweep from black to white, because an
