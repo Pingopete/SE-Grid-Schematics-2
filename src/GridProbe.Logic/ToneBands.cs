@@ -51,34 +51,24 @@ internal static class ToneBands
     // tone-mapping choice: it belongs here, at the boundary, and not smeared
     // through the tone maps where it would corrupt what the modes mean.
     //
-    // Gamma 1.0 is no correction. Now that the range is mapped onto the panel's
-    // actual window (MinAlpha to BlitBrightness) rather than onto 0..255, only
-    // a mild correction is left to make: inside that window the raw response
-    // grades fairly evenly. The steep values this wanted before were
-    // compensating for a range that was mostly falling outside the window.
-    public static volatile float PanelGamma = 1.3f;
+    // Gamma 1.0 is no correction. 2.2 is the value the render read best at, so
+    // it stays put until something is measured well enough to move it.
+    public static volatile float PanelGamma = 2.2f;
 
     // Candidates drawn side by side by VectorLcd's test ramp. The correct one
     // is whichever row reads as an EVEN sweep from black to white, because an
     // even sweep means tone and perceived brightness finally agree.
-    public static readonly float[] GammaCandidates = { 1.0f, 1.3f, 1.6f, 2.0f };
+    public static readonly float[] GammaCandidates = { 1.8f, 2.2f, 2.6f, 3.0f };
 
-    // The panel has a DEAD ZONE. Measured on the ramp's fine toe row, it stays
-    // black until roughly input 10 and only then starts to lift. Nothing below
-    // that renders at all.
+    // The faintest material still has to register. A steep correction drives
+    // the thinnest columns below a single alpha step, which would drop them
+    // out of the panel and take the silhouette's edge with them.
     //
-    // So this is not a taste value, it is the bottom of the window the panel
-    // can display, expressed as alpha against BlitBrightness (10/128 of the
-    // range). Setting it lower does not buy darker darks — it drops the
-    // faintest material into the dead zone where it turns pure black and takes
-    // the shading with it. That is what produced the jump from hull grey
-    // straight to background: the tones meant to bridge it were being drawn,
-    // and the panel was showing every one of them as black.
-    //
-    // Placing the floor at the top of the dead zone makes the thinnest material
-    // the dimmest grey the panel can actually show, which is as close to
-    // bridging as the hardware allows.
-    private const double MinAlpha = 22.0 / 255.0;
+    // I raised this to 22/255 on a reading that the panel has a dead zone below
+    // input 10. That reading was wrong — it washed the render out — so it is
+    // back at the value the render read best at. The ramp rows I based it on
+    // disagree with each other, and until that is resolved this stays put.
+    private const double MinAlpha = 4.0 / 255.0;
 
     // Below this tone the curve goes LINEAR. A power curve steep enough to
     // undo the panel's lift squeezes the bottom half of the tone range into a
@@ -95,7 +85,7 @@ internal static class ToneBands
     // alpha steps — which reads as a jump from the hull's grey straight to
     // black, the very gap it was meant to prevent. It only needs to cover the
     // few percent where a steep curve would otherwise round to nothing.
-    private const double Knee = 0.15;
+    private const double Knee = 0.2;
 
     public static double PanelCurve(double tone01) => PanelCurve(tone01, PanelGamma);
 

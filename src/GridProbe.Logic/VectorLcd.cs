@@ -29,11 +29,15 @@ internal static class VectorLcd
     // this is not "how bright to draw": it is the top of the range the panel
     // can actually distinguish, and alpha's 255 steps get spread across it.
     //
-    // Measured off the ramp's fine shoulder row: 128 is already fully white, so
-    // that is the white point. Above it, alpha's steps pile up in the saturated
-    // region where they all look the same (255 blew the render out doing
-    // exactly that); below it the top of the range never reaches white at all
-    // (100 topped out grey). This is the one value that does neither.
+    // The white point: the input above which the panel shows one flat white.
+    // Above it alpha's steps pile up in the saturated region where they all
+    // look the same, and 255 blew the render out doing exactly that. Below it
+    // the top of the range never reaches white at all, which is what 100 did.
+    //
+    // The ramp's shoulder row is white from 128 up, so the white point is at
+    // or below 128. This is the single change from the configuration that read
+    // best: everything else there is unchanged, so if the top now bridges to
+    // white without the rest washing out, 128 is right.
     public static volatile int BlitBrightness = 128;
     // Measurement, not decoration. Nothing in this mod has ever checked that the
     // alpha we hand the panel is the brightness that comes back off the glass —
